@@ -1,0 +1,213 @@
+# --------------------------------------------------------------------
+# build.py: The main BuildEngine definition.
+#
+# Author: Lain Musgrove (lain.proliant@gmail.com)
+# Date: Thursday, January 2 2020
+#
+# Distributed under terms of the MIT license.
+# --------------------------------------------------------------------
+
+import asyncio
+import inspect
+import json
+import sys
+from typing import Any, List
+from ansilog import fg, bg
+
+import xeno
+
+from .config import Config
+from .errors import BuildError, BuildFailure, AggregateError
+from .recipes import Recipe, RecipeHistory
+from .util import get_logger, is_iterable
+
+# --------------------------------------------------------------------
+log = get_logger("panifex")
+
+
+# -------------------------------------------------------------------
+@xeno.namespace("build")
+class BuildEngine:
+    name = "Build script."
+
+    def __init__(self, exit_on_error=True):
+        self._exit_on_error = exit_on_error
+        self._initialize()
+
+    def _initialize(self):
+        Recipe.cleaning = False
+        self._injector = xeno.Injector()
+        self._cache = {}
+        self._temps = []
+
+    def temp(self, f):
+        @xeno.MethodAttributes.wraps(f)
+        async def wrapper(*args, **kwargs):
+            result = await xeno.async_wrap(f, *args, **kwargs)
+            if is_iterable(result):
+                self._temps.extend(result)
+            else:
+                self._temps.append(result)
+            return result
+
+        return wrapper
+
+    # pylint: disable=R0201
+    def noclean(self, f):
+        async def wrapper(*args, **kwargs):
+            if Recipe.cleaning:
+                return None
+            return await xeno.async_wrap(f, *args, **kwargs)
+
+        return wrapper
+
+    @xeno.provide
+    def log(self):
+        return log
+
+    def build_report(self, filename=None):
+        pass
+
+    def __call__(self, *module_objects):
+        config = Recipe.config = Config().parse_args(self.name)
+
+        try:
+            if len(module_objects) > 1:
+                def impl(module):
+                    modules = [
+                        obj() if inspect.isclass(obj) else obj for obj in module_objects
+                    ]
+                    return self._resolve_build(modules, config)
+                return impl
+
+            module = module_objects[0]
+            module = module() if inspect.isclass(module) else module
+            result = self._resolve_build([module], config)
+            log.info("")
+            if config.cleaning:
+                log.info(fg.green("CLEAN"))
+            else:
+                log.info(fg.green("OK"))
+            return result
+
+        except Exception:
+            if config.verbose:
+                log.exception("Fatal exception details >>>")
+            log.info("")
+            log.info(fg.white(bg.red("FAIL")))
+            if self._exit_on_error:
+                sys.exit(1)
+
+        finally:
+            RecipeHistory.clear()
+            Recipe.config = Config()
+            self._initialize()
+
+    def _resolve_build(self, modules: List[Any], config: Config):
+        if not modules:
+            raise BuildError("At least one build class or object must be provided.")
+
+        Recipe.cleaning = config.cleaning
+
+        main_module, *support_modules = modules
+        default_target, targets = self._patch_module(main_module, main_module=True)
+        for module in support_modules:
+            self._patch_module(module)
+        self._injector.add_async_injection_interceptor(self._intercept_coroutines)
+        self._injector.add_module(main_module, skip_cycle_check=True)
+        for module in support_modules:
+            self._injector.add_module(module, skip_cycle_check=True)
+        self._injector.check_for_cycles()
+
+        if not config.targets:
+            if default_target:
+                config.targets = [default_target]
+            else:
+                config.targets = targets
+
+        for target in config.targets:
+            if target not in targets:
+                raise BuildError(f'Unknown target: "{target}".')
+
+        try:
+            loop = asyncio.get_event_loop()
+            result_map = {
+                target: loop.run_until_complete(self._resolve_resource(target))
+                for target in config.targets
+            }
+            loop.run_until_complete(self._cleanup_temps())
+
+        except Exception as e:
+            raise BuildFailure() from e
+
+        return result_map
+
+    def _patch_module(self, module, main_module=False):
+        """Patch the modules so that all methods not starting with underscore
+        are modded to be Xeno providers."""
+        default_target = None
+        targets = []
+        cls = type(module)
+        for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
+            if not name.startswith("_"):
+                setattr(cls, name, xeno.provide(xeno.singleton(method)))
+                attrs = xeno.MethodAttributes.for_method(method)
+                name = attrs.get("name")
+                targets.append(name)
+                if main_module and attrs.check("panifex.default_target"):
+                    default_target = name
+        return default_target, targets
+
+    async def _resolve_resource(self, name, value=xeno.NOTHING, alias=None):
+        name = alias or name
+        if name in self._cache:
+            value = self._cache[name]
+
+        else:
+            value = (
+                await self._injector.require_async(name)
+                if value is xeno.NOTHING
+                else value
+            )
+
+            try:
+                value = self._cache[name] = await self._deep_resolve(value)
+                if not Recipe.cleaning:
+                    log.info(fg.green('[ok]') + ' ' + name)
+
+            except Exception as e:
+                log.info(fg.white(bg.red('[!!]')) + ' ' + name)
+                raise BuildFailure(name) from e
+
+        return value
+
+    async def _deep_resolve(self, value):
+        if isinstance(value, Recipe):
+            return await self._deep_resolve(await value.make())
+        if inspect.isgenerator(value):
+            return await self._deep_resolve(list(value))
+        if asyncio.iscoroutine(value):
+            return await self._deep_resolve(await value)
+        if is_iterable(value):
+            return AggregateError.aggregate(
+                *await asyncio.gather(
+                    *(self._deep_resolve(v) for v in value), return_exceptions=True
+                )
+            )
+        return value
+
+    async def _intercept_coroutines(self, attrs, param_map, alias_map):
+        return {
+            k: await self._resolve_resource(k, value=v, alias=alias_map[k])
+            for k, v in param_map.items()
+        }
+
+    async def _cleanup_temps(self):
+        result = AggregateError.aggregate(await asyncio.gather(
+            *[x.clean() for x in self._temps], return_exceptions=True
+        ))
+        return result
+
+
+# -------------------------------------------------------------------
+build = BuildEngine()
