@@ -131,7 +131,8 @@ class SubprocessReport(Report):
             **super().generate(),
             "cmd": self.cmd,
             "returncode": self.returncode,
-            "output": [line.json() for line in self.sink.output()] if self.sink else [],
+            "out": [line.json() for line in self.sink.output() if not line.stderr] if self.sink else [],
+            "err": [line.json() for line in self.sink.output() if line.stderr] if self.sink else [],
         }
 
     def log_output(self, stdout=True, stderr=True):
@@ -140,26 +141,27 @@ class SubprocessReport(Report):
             return
 
         for line in self.sink.output():
+            if not line.stderr and stdout:
+                log.info(line.line)
+
+        for line in self.sink.output():
             if line.stderr and stderr:
                 log.info(fg.red(line.line))
-            elif stdout:
-                log.info(line.line)
 
 
 # -------------------------------------------------------------------
 class ShellRecipe(FileRecipe):
     OUT = "output"
     IN = "input"
+    CWD = "cwd"
     _limiter = asyncio.BoundedSemaphore(CPU_CORES)
 
-    def __init__(self, command, output, **params):
+    def __init__(self, command, **params):
         super().__init__()
-        if output is None:
-            raise BuildError("Recipe must have an 'output' parameter specified.")
 
-        params[self.OUT] = output
         self._input = params.get(self.IN, None)
-        self._output = output
+        self._output = params.get(self.OUT, None)
+        self._cwd = params.get(self.CWD, os.getcwd())
         self._env = {}
         self._command = command
         self._params = {**params}
@@ -198,12 +200,17 @@ class ShellRecipe(FileRecipe):
                     params[k] = shlex.quote(str(v))
 
             self._cmd = cmd.format(**params)
+            args = shlex.split(self._cmd)
+            decorated_args = f" {fg.magenta(args[0])} {shlex.join(args[1:])}"
+            log.info(fg.blue("[sh]") + decorated_args)
+
             proc = await asyncio.create_subprocess_shell(
                 self._cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=digest_env(params),
+                cwd=self._cwd
             )
 
             collector = ShellOutputCollector(proc)
@@ -211,13 +218,14 @@ class ShellRecipe(FileRecipe):
             await proc.wait()
 
             self._returncode = proc.returncode
+            self.finish()
 
             if self.succeeded():
-                log.info(fg.blue('[$>]') + ' ' + self._cmd)
+                log.info(fg.green('[ok]') + decorated_args)
                 if self.config.verbose:
                     self.report().log_output()
             else:
-                log.info(fg.white(bg.red('[$>]')) + ' ' + self._cmd)
+                log.info(fg.white(bg.red('[!!]')) + decorated_args)
                 self.report().log_output()
 
         finally:

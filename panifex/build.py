@@ -22,7 +22,32 @@ from .recipes import Recipe, RecipeHistory
 from .util import get_logger, is_iterable
 
 # --------------------------------------------------------------------
+DEFAULT_TARGET = "panifex.default_target"
+KEEP = "panifex.keep"
+
+
+# --------------------------------------------------------------------
 log = get_logger("panifex")
+
+
+# -------------------------------------------------------------------
+def default(f):
+    attrs = xeno.MethodAttributes.for_method(f, create=True, write=True)
+    attrs.put(DEFAULT_TARGET)
+    return f
+
+
+# -------------------------------------------------------------------
+def keep(f):
+    attrs = xeno.MethodAttributes.for_method(f, create=True, write=True)
+    attrs.put(KEEP)
+    return f
+
+
+# -------------------------------------------------------------------
+class Sequential:
+    def __init__(self, *items):
+        self.items = items
 
 
 # -------------------------------------------------------------------
@@ -90,9 +115,23 @@ class BuildEngine:
                 log.info(fg.green("OK"))
             return result
 
-        except Exception:
+        except AggregateError as e:
+            if config.verbose:
+                log.exception("Aggregate exception details >>>")
+                for err in e.errors:
+                    log.info("")
+                    for err in e.errors:
+                        log.exception("Sub-exception >>>", exc_info=err)
+
+            log.info("")
+            log.info(fg.white(bg.red("FAIL")))
+            if self._exit_on_error:
+                sys.exit(1)
+
+        except Exception as e:
             if config.verbose:
                 log.exception("Fatal exception details >>>")
+
             log.info("")
             log.info(fg.white(bg.red("FAIL")))
             if self._exit_on_error:
@@ -119,26 +158,26 @@ class BuildEngine:
             self._injector.add_module(module, skip_cycle_check=True)
         self._injector.check_for_cycles()
 
+        keepers = self._get_keepers()
+
         if not config.targets:
             if default_target:
-                config.targets = [default_target]
+                config.targets = [*self._injector.get_dependency_graph(default_target).keys()]
             else:
                 config.targets = targets
+
+            config.targets = [t for t in config.targets if t not in keepers]
 
         for target in config.targets:
             if target not in targets:
                 raise BuildError(f'Unknown target: "{target}".')
 
-        try:
-            loop = asyncio.get_event_loop()
-            result_map = {
-                target: loop.run_until_complete(self._resolve_resource(target))
-                for target in config.targets
-            }
-            loop.run_until_complete(self._cleanup_temps())
-
-        except Exception as e:
-            raise BuildFailure() from e
+        loop = asyncio.get_event_loop()
+        result_map = {
+            target: loop.run_until_complete(self._resolve_resource(target, targeted=True))
+            for target in config.targets
+        }
+        loop.run_until_complete(self._cleanup_temps())
 
         return result_map
 
@@ -150,17 +189,22 @@ class BuildEngine:
         cls = type(module)
         for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
             if not name.startswith("_"):
-                setattr(cls, name, xeno.provide(xeno.singleton(method)))
+                setattr(cls, name, xeno.provide(method))
                 attrs = xeno.MethodAttributes.for_method(method)
                 name = attrs.get("name")
                 targets.append(name)
-                if main_module and attrs.check("panifex.default_target"):
+                if main_module and attrs.check(DEFAULT_TARGET):
                     default_target = name
         return default_target, targets
 
-    async def _resolve_resource(self, name, value=xeno.NOTHING, alias=None):
+    def _get_keepers(self):
+        """Get all resources tagged as 'keepers', these will only be cleaned when
+        explicitly specified as targets."""
+        return {k for k, v in self._injector.scan_resources(lambda key, att: att.check(KEEP))}
+
+    async def _resolve_resource(self, name, value=xeno.NOTHING, alias=None, targeted=False):
         name = alias or name
-        if name in self._cache:
+        if name in self._cache and not Recipe.cleaning:
             value = self._cache[name]
 
         else:
@@ -171,27 +215,31 @@ class BuildEngine:
             )
 
             try:
-                value = self._cache[name] = await self._deep_resolve(value)
+                if not Recipe.cleaning or targeted:
+                    log.info(fg.blue('[..]') + ' ' + name)
+                value = self._cache[name] = await self._deep_resolve(value, targeted)
                 if not Recipe.cleaning:
                     log.info(fg.green('[ok]') + ' ' + name)
 
             except Exception as e:
                 log.info(fg.white(bg.red('[!!]')) + ' ' + name)
-                raise BuildFailure(name) from e
+                raise e
 
         return value
 
-    async def _deep_resolve(self, value):
+    async def _deep_resolve(self, value, targeted=False):
         if isinstance(value, Recipe):
-            return await self._deep_resolve(await value.make())
+            return await self._deep_resolve(await value.make(targeted))
         if inspect.isgenerator(value):
-            return await self._deep_resolve(list(value))
+            return await self._deep_resolve(list(value), targeted=targeted)
         if asyncio.iscoroutine(value):
             return await self._deep_resolve(await value)
+        if isinstance(value, Sequential):
+            return [await self._deep_resolve(v, targeted=targeted) for v in value.items]
         if is_iterable(value):
             return AggregateError.aggregate(
                 *await asyncio.gather(
-                    *(self._deep_resolve(v) for v in value), return_exceptions=True
+                    *(self._deep_resolve(v, targeted=targeted) for v in value), return_exceptions=True
                 )
             )
         return value
@@ -211,3 +259,4 @@ class BuildEngine:
 
 # -------------------------------------------------------------------
 build = BuildEngine()
+seq = Sequential

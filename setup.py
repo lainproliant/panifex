@@ -10,13 +10,14 @@ with open(path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="panifex",
-    version="0.1",
+    version="0.2",
     description="A make-like DI-based Python build system.",
     long_description=long_description,
+    long_description_content_type="text/markdown",
     url="https://github.com/lainproliant/panifex",
     author="Lain Musgrove (lainproliant)",
     author_email="lain.proliant@gmail.com",
-    license="BSD",
+    license="MIT",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
@@ -31,5 +32,5 @@ setup(
     extras_require={},
     package_data={'panifex': []},
     data_files=[],
-    entry_points={"console_scripts": []},
+    entry_points={"console_scripts": ['bake=panifex.bake:main']},
 )

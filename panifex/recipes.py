@@ -35,17 +35,20 @@ class Recipe:
         self.skipped = False
         RecipeHistory.add(self)
 
-    async def make(self) -> Any:
+    async def make(self, targeted=False) -> Any:
         self.started = datetime.now()
 
-        if self.cleaning and self.is_done():
-            await self._clean()
+        if self.cleaning:
+            if targeted:
+                await self._clean()
+            else:
+                return self.output()
         elif not self.is_done():
             await self._resolve()
         else:
             self.skipped = True
 
-        self.finished = datetime.now()
+        self.finish()
         if not self.succeeded():
             raise BuildError("A recipe failed.")
 
@@ -68,6 +71,10 @@ class Recipe:
 
     def is_done(self) -> bool:
         return self.finished is not None
+
+    def finish(self):
+        if self.finished is None:
+            self.finished = datetime.now()
 
     def succeeded(self) -> bool:
         return self.is_done() or self.cleaning
@@ -130,7 +137,7 @@ class FileRecipe(Recipe):
         elif value is not None:
             file = Path(value)
             if file.exists():
-                log.info(fg.blue('[--]') + ' ' + str(file))
+                log.info(fg.green('[ok]') + fg.magenta(' delete ') + str(file))
                 if file.is_file():
                     file.unlink()
                 elif file.is_dir():
@@ -154,7 +161,13 @@ class FileRecipe(Recipe):
             return all(self.is_done(v) for v in value)
         if value is not None:
             output_file = Path(value)
-            if not output_file.exists():
-                return self.cleaning
-            return self._get_input_mtime() < output_file.stat().st_mtime
-        return False
+            if self.cleaning:
+                return not output_file.exists()
+            elif not output_file.exists():
+                return False
+            else:
+                return self._get_input_mtime() < output_file.stat().st_mtime
+        elif self.cleaning:
+            return True
+        else:
+            return super().is_done()
