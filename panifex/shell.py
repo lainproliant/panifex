@@ -9,6 +9,7 @@
 import asyncio
 import os
 import shlex
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
@@ -71,6 +72,35 @@ class InMemoryOutputSink(OutputSink):
     def output(self) -> Generator[OutputLine, None, None]:
         yield from sorted(self._output, key=lambda x: x.when)
 
+
+# -------------------------------------------------------------------
+class EmptyOutputSink(OutputSink):
+    def output(self) -> Generator[OutputLine, None, None]:
+        yield from ()
+
+
+# -------------------------------------------------------------------
+class PostMortemOutputSink(OutputSink):
+    def __init__(self, stdout: str, stderr: str):
+        self._stdout = stdout
+        self._stderr = stderr
+
+    def output(self) -> Generator[OutputLine, None, None]:
+        for line in self._stdout.splitlines():
+            yield OutputLine(False, line)
+        for line in self._stderr.splitlines():
+            yield OutputLine(True, line)
+
+
+# -------------------------------------------------------------------
+class OutputCollector:
+    async def collect():
+        # TODO
+        pass
+
+# -------------------------------------------------------------------
+class ProcessCommunicateCollector:
+    pass
 
 # -------------------------------------------------------------------
 class ShellOutputCollector:
@@ -166,6 +196,8 @@ class ShellRecipe(FileRecipe):
         self._command = command
         self._params = {**params}
         self._name = "Shell Command"
+        self._user_input = None
+        self._interactive = False
 
         if "__name__" in self._params:
             self._name = self._params["__name__"]
@@ -183,6 +215,15 @@ class ShellRecipe(FileRecipe):
 
     def merge_env(self, env):
         self._env.update(env)
+        return self
+
+    def interactive(self):
+        self._interactive = True
+        return self
+
+    def user_input(self, input):
+        self._user_input = input
+        return self
 
     async def _resolve(self) -> Any:
         await self._run_command(self._command)
@@ -204,22 +245,32 @@ class ShellRecipe(FileRecipe):
             decorated_args = f" {fg.magenta(args[0])} {shlex.join(args[1:])}"
             log.info(fg.blue("[sh]") + decorated_args)
 
-            proc = await asyncio.create_subprocess_shell(
-                self._cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=digest_env(params),
-                cwd=self._cwd
-            )
+            if self._interactive:
+                if self._user_input:
+                    raise ValueError("Interactive shell can't provide input programmatically.")
+                self._sink = EmptyOutputSink()
+                self._returncode = subprocess.call(
+                    self._cmd,
+                    env=digest_env(params),
+                    cwd=self._cwd,
+                    shell=True)
 
-            collector = ShellOutputCollector(proc)
-            self._sink = await collector.collect()
-            await proc.wait()
+            else:
+                proc = await asyncio.create_subprocess_shell(
+                    self._cmd,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=digest_env(params),
+                    cwd=self._cwd
+                )
 
-            self._returncode = proc.returncode
+                collector = ShellOutputCollector(proc)
+                self._sink = await collector.collect()
+                await proc.wait()
+                self._returncode = proc.returncode
+
             self.finish()
-
             if self.succeeded():
                 log.info(fg.green('[ok]') + decorated_args)
                 if self.config.verbose:
