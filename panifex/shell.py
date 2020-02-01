@@ -13,9 +13,11 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
-from ansilog import fg, bg
+
+from ansilog import bg, fg
 
 from .config import CPU_CORES
+from .errors import BuildError
 from .recipes import FileRecipe
 from .reports import Report
 from .util import digest_env, format_dt, get_logger, is_iterable
@@ -96,16 +98,11 @@ class OutputCollector:
 
 
 # -------------------------------------------------------------------
-class AsyncioShellOutputCollector(OutputCollector):
+class ShellOutputCollector:
     # pylint/issues/1469: pylint doesn't recognize asyncio.subprocess
     # pylint: disable=E1101
-    def __init__(
-        self, sink: Optional[OutputSink] = None
-    ):
+    def __init__(self):
         self._readline_tasks: Dict[asyncio.Future[Any], ShellOutputTaskData] = {}
-        if sink is None:
-            sink = InMemoryOutputSink()
-        self._sink = sink
 
     def _setup_readline_task(
         self, stream: asyncio.StreamReader, sink: Callable[[str], None]
@@ -113,13 +110,13 @@ class AsyncioShellOutputCollector(OutputCollector):
         if stream is not None:
             self._readline_tasks[asyncio.Task(stream.readline())] = (stream, sink)
 
-    async def collect(self, proc: Any) -> OutputSink:
+    async def collect(self, proc: Any, sink: OutputSink):
         if not isinstance(proc, asyncio.subprocess.Process):
-            raise ValueError('`proc` is not an asyncio.subprocess.Process object.')
-        if hasattr(proc, 'stdout') and proc.stdout is not None:
-            self._setup_readline_task(proc.stdout, self._sink.out)
-        if hasattr(proc, 'stderr') and proc.stderr is not None:
-            self._setup_readline_task(proc.stderr, self._sink.err)
+            raise ValueError("`proc` is not an asyncio.subprocess.Process object.")
+        if hasattr(proc, "stdout") and proc.stdout is not None:
+            self._setup_readline_task(proc.stdout, sink.out)
+        if hasattr(proc, "stderr") and proc.stderr is not None:
+            self._setup_readline_task(proc.stderr, sink.err)
 
         while self._readline_tasks:
             done, pending = await asyncio.wait(
@@ -127,28 +124,26 @@ class AsyncioShellOutputCollector(OutputCollector):
             )
 
             for future in done:
-                stream, sink = self._readline_tasks.pop(future)
+                stream, sink_f = self._readline_tasks.pop(future)
                 line = future.result()
                 if line:
                     line = line.decode("utf-8").strip()
-                    sink(line)
-                    self._setup_readline_task(stream, sink)
-
-        return self._sink
+                    sink_f(line)
+                    self._setup_readline_task(stream, sink_f)
 
 
 # -------------------------------------------------------------------
-class SubprocessCommunicateOutputCollector(OutputCollector):
+class ShellCommunicateOutputCollector(OutputCollector):
     async def collect(self, proc: Any) -> OutputSink:
         if not isinstance(proc, subprocess.Popen):
-            raise ValueError('`proc` is not a subprocess.Popen object.')
+            raise ValueError("`proc` is not a subprocess.Popen object.")
 
         return PostCommunicateOutputSink(*proc.communicate())
 
 
 # --------------------------------------------------------------------
 @dataclass
-class SubprocessReport(Report):
+class ShellReport(Report):
     name: str
     started: Optional[datetime]
     finished: Optional[datetime]
@@ -164,10 +159,12 @@ class SubprocessReport(Report):
             **super().generate(),
             "cmd": self.cmd,
             "returncode": self.returncode,
-            "out": [line.json() for line in self.sink.output()
-                    if not line.stderr] if self.sink else [],
-            "err": [line.json() for line in self.sink.output()
-                    if line.stderr] if self.sink else [],
+            "out": [line.json() for line in self.sink.output() if not line.stderr]
+            if self.sink
+            else [],
+            "err": [line.json() for line in self.sink.output() if line.stderr]
+            if self.sink
+            else [],
         }
 
     def log_output(self, stdout=True, stderr=True):
@@ -182,6 +179,13 @@ class SubprocessReport(Report):
         for line in self.sink.output():
             if line.stderr and stderr:
                 log.info(fg.red(line.line))
+
+
+# --------------------------------------------------------------------
+class ShellFailed(BuildError):
+    def __init__(self, report: ShellReport):
+        super().__init__(f"{report.name} failed.")
+        self.report = report
 
 
 # -------------------------------------------------------------------
@@ -203,7 +207,7 @@ class ShellRecipe(FileRecipe):
         self._name = "Shell Command"
         self._sink: Optional[OutputSink] = None
         self._returncode = 0
-        self._cmd = " ".join(self._command)
+        self._cmd = shlex.join(self._command)
         self._user_input: Optional[str] = None
         self._interactive = False
 
@@ -234,6 +238,15 @@ class ShellRecipe(FileRecipe):
 
     def merge_env(self, env):
         self._env.update(env)
+        return self
+
+    def interactive(self):
+        self._interactive = True
+        return self
+
+    def user_input(self, input):
+        self._user_input = input
+        return self
 
     async def _resolve(self) -> Any:
         await self._run_command(self._command)
@@ -256,10 +269,15 @@ class ShellRecipe(FileRecipe):
             log.info(fg.blue("[sh]") + decorated_args)
 
             if self._interactive:
-                popen = subprocess.Popen(args,
-                                         env=digest_env(params),
+                if self._user_input:
+                    raise ValueError(
+                        "Interactive shell can't provide input programmatically."
+                    )
+                self._sink = NullOutputSink()
+                self._returncode = subprocess.call(
+                    self._cmd, env=digest_env(params), cwd=self._cwd, shell=True
+                )
 
-                pass
             else:
                 proc = await asyncio.create_subprocess_shell(
                     self._cmd,
@@ -267,22 +285,22 @@ class ShellRecipe(FileRecipe):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=digest_env(params),
-                    cwd=self._cwd
+                    cwd=self._cwd,
                 )
 
-                collector = AsyncioShellOutputCollector()
-                self._sink = await collector.collect(proc)
+                collector = ShellOutputCollector()
+                self._sink = InMemoryOutputSink()
+                await collector.collect(proc, self._sink)
                 await proc.wait()
+                self._returncode = proc.returncode
 
-            self._returncode = proc.returncode
             self.finish()
-
             if self.succeeded():
-                log.info(fg.green('[ok]') + decorated_args)
+                log.info(fg.green("[ok]") + decorated_args)
                 if self.config.verbose:
                     self.report().log_output()
             else:
-                log.info(fg.white(bg.red('[!!]')) + decorated_args)
+                log.info(fg.white(bg.red("[!!]")) + decorated_args)
                 self.report().log_output()
 
         finally:
@@ -294,8 +312,8 @@ class ShellRecipe(FileRecipe):
     def output(self) -> Any:
         return self._output
 
-    def report(self) -> SubprocessReport:
-        return SubprocessReport(
+    def report(self) -> ShellReport:
+        return ShellReport(
             name=self._name,
             started=self.started,
             finished=self.finished,
