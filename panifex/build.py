@@ -109,7 +109,7 @@ class BuildEngine:
             module = module() if inspect.isclass(module) else module
             result = self._resolve_build([module], config)
             log.info("")
-            if config.cleaning:
+            if Recipe.cleaning:
                 log.info(fg.green("CLEAN"))
             else:
                 log.info(fg.green("OK"))
@@ -122,6 +122,9 @@ class BuildEngine:
                     log.info("")
                     for err in e.errors:
                         log.exception("Sub-exception >>>", exc_info=err)
+                else:
+                    for err in e.errors:
+                        log.error(f"{type(err).__name__}: {err}")
 
             log.info("")
             log.info(fg.white(bg.red("FAIL")))
@@ -131,6 +134,8 @@ class BuildEngine:
         except Exception as e:
             if config.verbose:
                 log.exception("Fatal exception details >>>")
+            else:
+                log.error(f"{type(e).__name__}: {e}")
 
             log.info("")
             log.info(fg.white(bg.red("FAIL")))
@@ -146,7 +151,7 @@ class BuildEngine:
         if not modules:
             raise BuildError("At least one build class or object must be provided.")
 
-        Recipe.cleaning = config.cleaning
+        Recipe.cleaning = config.cleaning or config.clean_all
 
         main_module, *support_modules = modules
         default_target, defined_targets = self._patch_module(main_module, main_module=True)
@@ -166,10 +171,13 @@ class BuildEngine:
             else:
                 raise BuildError('No target was specified and no default target is defined.')
 
-        targets = [*self._injector.get_ordered_dependencies(config.target), config.target]
+        if not Recipe.cleaning or config.clean_all:
+            targets = [*self._injector.get_ordered_dependencies(config.target), config.target]
+        else:
+            targets = [config.target]
 
         if Recipe.cleaning:
-            targets = [t for t in targets if t not in keepers]
+            targets = [t for t in targets if t not in keepers or t == config.target]
 
         for target in targets:
             if target not in defined_targets:

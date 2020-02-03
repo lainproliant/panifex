@@ -202,14 +202,14 @@ class ShellRecipe(FileRecipe):
         self._output = params.get(self.OUT, None)
         self._cwd = params.get(self.CWD, os.getcwd())
         self._env = {}
-        self._command = command
         self._params = {**params}
         self._name = "Shell Command"
         self._sink: Optional[OutputSink] = None
         self._returncode = 0
-        self._cmd = shlex.join(self._command)
+        self._cmd = shlex.join(command) if isinstance(command, (list, tuple)) else command
         self._user_input: Optional[str] = None
         self._interactive = False
+        self._echo = True
 
     def with_env(self, env: Dict):
         self.merge_env(env)
@@ -226,8 +226,12 @@ class ShellRecipe(FileRecipe):
         self._user_input = input
         return self
 
+    def no_echo(self):
+        self._echo = False
+        return self
+
     def __repr__(self):
-        return f"<panifex.ShellRecipe {self._command}, {self._params}>"
+        return f"<panifex.ShellRecipe {self._cmd}, {self._params}>"
 
     def _check_success(self):
         if not self.succeeded():
@@ -249,14 +253,15 @@ class ShellRecipe(FileRecipe):
         return self
 
     async def _resolve(self) -> Any:
-        await self._run_command(self._command)
+        await self._run_command(self._cmd)
         return self.output()
 
     async def _run_command(self, cmd) -> None:
         await self._limiter.acquire()
         try:
             params, args, decorated_args = self._parse_command(cmd)
-            log.info(fg.blue("[sh]") + decorated_args)
+            if self._echo:
+                log.info(fg.blue("[sh]") + decorated_args)
 
             if self._interactive:
                 if self._user_input:
@@ -290,7 +295,8 @@ class ShellRecipe(FileRecipe):
                 self._returncode = proc.returncode
 
             self.finish()
-            self._print_run_report(decorated_args)
+            if self._echo:
+                self._print_run_report(decorated_args)
 
         finally:
             self._limiter.release()
@@ -306,13 +312,15 @@ class ShellRecipe(FileRecipe):
 
         self._cmd = cmd.format(**params)
         args = shlex.split(self._cmd)
+
         decorated_args = f" {fg.magenta(args[0])} {shlex.join(args[1:])}"
 
         return params, args, decorated_args
 
     def _run_command_sync(self, cmd):
         params, args, decorated_args = self._parse_command(cmd)
-        self._print_run_header(decorated_args)
+        if self._echo:
+            self._print_run_header(decorated_args)
 
         if self._interactive:
             if self._user_input:
@@ -338,7 +346,8 @@ class ShellRecipe(FileRecipe):
             self._returncode = proc.returncode
 
         self.finish()
-        self._print_run_report(decorated_args)
+        if self._echo:
+            self._print_run_report(decorated_args)
 
     @classmethod
     def _print_run_header(cls, decorated_args):
@@ -370,7 +379,7 @@ class ShellRecipe(FileRecipe):
         )
 
     def sync(self) -> 'ShellRecipe':
-        self._run_command_sync(self._command)
+        self._run_command_sync(self._cmd)
         return self
 
 
