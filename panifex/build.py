@@ -149,7 +149,7 @@ class BuildEngine:
         Recipe.cleaning = config.cleaning
 
         main_module, *support_modules = modules
-        default_target, targets = self._patch_module(main_module, main_module=True)
+        default_target, defined_targets = self._patch_module(main_module, main_module=True)
         for module in support_modules:
             self._patch_module(module)
         self._injector.add_async_injection_interceptor(self._intercept_coroutines)
@@ -160,22 +160,25 @@ class BuildEngine:
 
         keepers = self._get_keepers()
 
-        if not config.targets:
+        if not config.target:
             if default_target:
-                config.targets = [*self._injector.get_dependency_graph(default_target).keys()]
+                config.target = default_target
             else:
-                config.targets = targets
+                raise BuildError('No target was specified and no default target is defined.')
 
-            config.targets = [t for t in config.targets if t not in keepers]
+        targets = [*self._injector.get_ordered_dependencies(config.target), config.target]
 
-        for target in config.targets:
-            if target not in targets:
+        if Recipe.cleaning:
+            targets = [t for t in targets if t not in keepers]
+
+        for target in targets:
+            if target not in defined_targets:
                 raise BuildError(f'Unknown target: "{target}".')
 
         loop = asyncio.get_event_loop()
         result_map = {
             target: loop.run_until_complete(self._resolve_resource(target, targeted=True))
-            for target in config.targets
+            for target in targets
         }
         loop.run_until_complete(self._cleanup_temps())
 

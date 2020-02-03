@@ -25,14 +25,14 @@ REPORT_DATETIME_FORMAT = f'{REPORT_DATE_FORMAT} {REPORT_TIME_FORMAT}'
 # -------------------------------------------------------------------
 class Config:
     def __init__(self):
-        self.targets = []
+        self.target = None
         self.cleaning = False
         self.verbose = False
 
     @classmethod
     def get_parser(cls, desc):
         parser = argparse.ArgumentParser(description=desc)
-        parser.add_argument("targets", metavar="target", nargs="*", default=None)
+        parser.add_argument("target", metavar="target", nargs="?", default=None)
         parser.add_argument("-c", "--clean", dest="cleaning", action="store_true")
         parser.add_argument('-v', "--verbose", default=False, action="store_true")
         return parser

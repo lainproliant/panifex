@@ -35,6 +35,9 @@ class Recipe:
         self.skipped = False
         RecipeHistory.add(self)
 
+    async def __await__(self) -> Any:
+        return await self.make(targeted=False)
+
     async def make(self, targeted=False) -> Any:
         self.started = datetime.now()
 
@@ -49,10 +52,13 @@ class Recipe:
             self.skipped = True
 
         self.finish()
-        if not self.succeeded():
-            raise BuildError("A recipe failed.")
+        self._check_success()
 
         return self.output()
+
+    def _check_success(self):
+        if not self.succeeded():
+            raise BuildError("A recipe failed.")
 
     def input(self) -> Any:
         raise NotImplementedError()
@@ -159,14 +165,13 @@ class FileRecipe(Recipe):
             return self.is_done(self.output())
         if is_iterable(value):
             return all(self.is_done(v) for v in value)
-        if value is not None:
+        if isinstance(value, (str, Path)):
             output_file = Path(value)
             if self.cleaning:
                 return not output_file.exists()
-            elif not output_file.exists():
+            if not output_file.exists():
                 return False
-            else:
-                return self._get_input_mtime() < output_file.stat().st_mtime
+            return self._get_input_mtime() < output_file.stat().st_mtime
         elif self.cleaning:
             return True
         else:

@@ -10,7 +10,7 @@ with open(path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="panifex",
-    version="0.3",
+    version="0.5",
     description="A make-like DI-based Python build system.",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -23,12 +23,11 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: BSD License",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
     ],
     keywords="build make",
     packages=find_packages(),
-    install_requires=["xeno>=4.0.0", "ansilog"],
+    install_requires=["xeno>=4.1.0", "ansilog"],
     extras_require={},
     package_data={'panifex': []},
     data_files=[],

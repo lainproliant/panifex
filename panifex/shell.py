@@ -226,12 +226,12 @@ class ShellRecipe(FileRecipe):
         self._user_input = input
         return self
 
-    def interactive(self):
-        self._interactive = True
-        return self
-
     def __repr__(self):
         return f"<panifex.ShellRecipe {self._command}, {self._params}>"
+
+    def _check_success(self):
+        if not self.succeeded():
+            raise ShellFailed(self.report())
 
     def succeeded(self):
         return self.is_done() and self._returncode == 0
@@ -255,17 +255,7 @@ class ShellRecipe(FileRecipe):
     async def _run_command(self, cmd) -> None:
         await self._limiter.acquire()
         try:
-            params = {**self._params, **self._env}
-
-            for k, v in params.items():
-                if is_iterable(v):
-                    params[k] = " ".join([shlex.quote(str(x)) for x in v])
-                else:
-                    params[k] = shlex.quote(str(v))
-
-            self._cmd = cmd.format(**params)
-            args = shlex.split(self._cmd)
-            decorated_args = f" {fg.magenta(args[0])} {shlex.join(args[1:])}"
+            params, args, decorated_args = self._parse_command(cmd)
             log.info(fg.blue("[sh]") + decorated_args)
 
             if self._interactive:
@@ -288,6 +278,11 @@ class ShellRecipe(FileRecipe):
                     cwd=self._cwd,
                 )
 
+                if self._user_input is not None and proc.stdin is not None:
+                    proc.stdin.write(self._user_input.encode('utf-8'))
+                    await proc.stdin.drain()
+                    proc.stdin.close()
+
                 collector = ShellOutputCollector()
                 self._sink = InMemoryOutputSink()
                 await collector.collect(proc, self._sink)
@@ -295,16 +290,68 @@ class ShellRecipe(FileRecipe):
                 self._returncode = proc.returncode
 
             self.finish()
-            if self.succeeded():
-                log.info(fg.green("[ok]") + decorated_args)
-                if self.config.verbose:
-                    self.report().log_output()
-            else:
-                log.info(fg.white(bg.red("[!!]")) + decorated_args)
-                self.report().log_output()
+            self._print_run_report(decorated_args)
 
         finally:
             self._limiter.release()
+
+    def _parse_command(self, cmd):
+        params = {**self._params, **self._env}
+
+        for k, v in params.items():
+            if is_iterable(v):
+                params[k] = " ".join([shlex.quote(str(x)) for x in v])
+            else:
+                params[k] = shlex.quote(str(v))
+
+        self._cmd = cmd.format(**params)
+        args = shlex.split(self._cmd)
+        decorated_args = f" {fg.magenta(args[0])} {shlex.join(args[1:])}"
+
+        return params, args, decorated_args
+
+    def _run_command_sync(self, cmd):
+        params, args, decorated_args = self._parse_command(cmd)
+        self._print_run_header(decorated_args)
+
+        if self._interactive:
+            if self._user_input:
+                raise ValueError(
+                    "Interactive shell can't provide input programmatically."
+                )
+            self._sink = NullOutputSink()
+            self._returncode = subprocess.call(
+                self._cmd, env=digest_env(params), cwd=self._cwd, shell=True
+            )
+        else:
+            proc = subprocess.Popen(
+                shlex.split(self._cmd),
+                env=digest_env(params),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=self._cwd,
+                text=True
+            )
+            stdout, stderr = proc.communicate(input=self._user_input)
+            self._sink = PostCommunicateOutputSink(stdout, stderr)
+            self._returncode = proc.returncode
+
+        self.finish()
+        self._print_run_report(decorated_args)
+
+    @classmethod
+    def _print_run_header(cls, decorated_args):
+        log.info(fg.blue("[sh]") + decorated_args)
+
+    def _print_run_report(self, decorated_args):
+        if self.succeeded():
+            log.info(fg.green("[ok]") + decorated_args)
+            if self.config.verbose:
+                self.report().log_output()
+        else:
+            log.info(fg.white(bg.red("[!!]")) + decorated_args)
+            self.report().log_output()
 
     def input(self) -> Any:
         return self._input
@@ -321,6 +368,10 @@ class ShellRecipe(FileRecipe):
             sink=self._sink,
             returncode=self._returncode,
         )
+
+    def sync(self) -> 'ShellRecipe':
+        self._run_command_sync(self._command)
+        return self
 
 
 # -------------------------------------------------------------------
