@@ -34,8 +34,8 @@ class Config:
     def get_parser(cls, desc):
         parser = argparse.ArgumentParser(description=desc)
         parser.add_argument("target", metavar="target", nargs="?", default=None)
-        parser.add_argument("-c", "--clean", dest="cleaning", action="store_true")
-        parser.add_argument("-C", "--clean-all", dest="clean_all", action="store_true")
+        parser.add_argument("-C", "--clean-target", dest="cleaning", action="store_true")
+        parser.add_argument("-c", "--clean", dest="clean_all", action="store_true")
         parser.add_argument('-v', "--verbose", default=False, action="store_true")
         return parser
 
