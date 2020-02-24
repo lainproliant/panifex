@@ -192,6 +192,7 @@ class ShellFailed(BuildError):
 class ShellRecipe(FileRecipe):
     OUT = "output"
     IN = "input"
+    INCLUDES = "includes"
     CWD = "cwd"
     _limiter = asyncio.BoundedSemaphore(CPU_CORES)
 
@@ -199,6 +200,7 @@ class ShellRecipe(FileRecipe):
         super().__init__()
 
         self._input = params.get(self.IN, None)
+        self._includes = params.get(self.INCLUDES, None)
         self._output = params.get(self.OUT, None)
         self._cwd = params.get(self.CWD, os.getcwd())
         self._env = {}
@@ -363,7 +365,7 @@ class ShellRecipe(FileRecipe):
             self.report().log_output()
 
     def input(self) -> Any:
-        return self._input
+        return [self._input, self._includes]
 
     def output(self) -> Any:
         return self._output
