@@ -17,7 +17,7 @@ from ansilog import fg, bg
 import xeno
 
 from .config import Config
-from .errors import BuildError, BuildFailure, AggregateError
+from .errors import BuildError, AggregateError
 from .recipes import Recipe, RecipeHistory
 from .util import get_logger, is_iterable
 
@@ -171,7 +171,9 @@ class BuildEngine:
             else:
                 raise BuildError('No target was specified and no default target is defined.')
 
-        if not Recipe.cleaning or config.clean_all:
+        if config.clean_all:
+            targets = defined_targets
+        if not Recipe.cleaning:
             targets = [*self._injector.get_ordered_dependencies(config.target), config.target]
         else:
             targets = [config.target]
