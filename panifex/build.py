@@ -173,7 +173,7 @@ class BuildEngine:
 
         if config.clean_all:
             targets = defined_targets
-        if not Recipe.cleaning:
+        elif not Recipe.cleaning:
             targets = [*self._injector.get_ordered_dependencies(config.target), config.target]
         else:
             targets = [config.target]
