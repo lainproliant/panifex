@@ -10,7 +10,7 @@ with open(path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="panifex",
-    version="0.7.1",
+    version="0.7.2",
     description="A make-like DI-based Python build system.",
     long_description=long_description,
     long_description_content_type="text/markdown",

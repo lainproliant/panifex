@@ -357,7 +357,6 @@ class ShellRecipe(FileRecipe):
 
     def _print_run_report(self, decorated_args):
         if self.succeeded():
-            log.info(fg.green("[ok]") + decorated_args)
             if self.config.verbose:
                 self.report().log_output()
         else:
