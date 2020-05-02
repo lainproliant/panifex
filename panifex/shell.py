@@ -389,6 +389,11 @@ class ShellRecipeFactory:
     def __init__(self):
         self._env = {**os.environ}
 
+    def clone(self) -> 'ShellRecipeFactory':
+        sh = ShellRecipeFactory()
+        sh.env(**self._env)
+        return sh
+
     def env(self, *args, **kwargs) -> Union[str, List[str]]:
         if kwargs:
             self._env.update(kwargs)
