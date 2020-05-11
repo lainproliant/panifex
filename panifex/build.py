@@ -202,7 +202,7 @@ class BuildEngine:
         cls = type(module)
         for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
             if not name.startswith("_"):
-                setattr(cls, name, xeno.provide(method))
+                setattr(cls, name, xeno.singleton(method))
                 attrs = xeno.MethodAttributes.for_method(method)
                 name = attrs.get("name")
                 targets.append(name)
