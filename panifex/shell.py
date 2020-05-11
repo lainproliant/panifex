@@ -167,7 +167,7 @@ class ShellReport(Report):
             else [],
         }
 
-    def log_output(self, stdout=True, stderr=True):
+    def log_output(self, stdout=True, stderr=True, log=log):
         if not self.sink:
             log.info("<no output>")
             return
