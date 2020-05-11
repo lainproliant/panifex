@@ -46,6 +46,9 @@ class OutputLine:
 
         return result
 
+    def __str__(self):
+        return self.line
+
 
 # -------------------------------------------------------------------
 class OutputSink:
@@ -167,8 +170,18 @@ class ShellReport(Report):
             else [],
         }
 
+    def output(self, stdout=True, stderr=False) -> Generator[OutputLine, None, None]:
+        if self.sink is None:
+            return
+
+        for line in self.sink.output():
+            if not line.stderr and stdout:
+                yield line
+            elif line.stderr and stderr:
+                yield line
+
     def log_output(self, stdout=True, stderr=True, log=log):
-        if not self.sink:
+        if self.sink is None:
             log.info("<no output>")
             return
 
