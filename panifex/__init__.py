@@ -8,5 +8,5 @@
 # -------------------------------------------------------------------
 
 from .build import build, default, seq, keep
-from .shell import sh
+from .shell import sh, ShellReport
 temp = build.temp
