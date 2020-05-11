@@ -370,7 +370,7 @@ class ShellRecipe(FileRecipe):
 
     def _print_run_report(self, decorated_args):
         if self.succeeded():
-            if self.config.verbose:
+            if self.config and self.config.verbose:
                 self.report().log_output()
         else:
             log.info(fg.white(bg.red("[!!]")) + decorated_args)
