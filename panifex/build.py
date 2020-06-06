@@ -9,15 +9,16 @@
 
 import asyncio
 import inspect
-import json
+import logging
 import sys
+from datetime import date
 from typing import Any, List
-from ansilog import fg, bg
 
 import xeno
+from ansilog import bg, fg, Formatter
 
 from .config import Config
-from .errors import BuildError, AggregateError
+from .errors import AggregateError, BuildError
 from .recipes import Recipe, RecipeHistory
 from .util import get_logger, is_iterable
 
@@ -28,6 +29,7 @@ KEEP = "panifex.keep"
 
 # --------------------------------------------------------------------
 log = get_logger("panifex")
+file_logging_setup = False
 
 
 # -------------------------------------------------------------------
@@ -90,11 +92,17 @@ class BuildEngine:
     def log(self):
         return log
 
-    def build_report(self, filename=None):
-        pass
+    def _setup_file_logging(self, config: Config):
+        filename = 'panifex-%s.log' % date.today().isoformat()
+        file_handler = logging.FileHandler(filename, mode='w')
+        file_handler.setFormatter(Formatter(file_handler.stream))
+        log.addHandler(file_handler)
 
     def __call__(self, *module_objects):
         config = Recipe.config = Config().parse_args(self.name)
+
+        if config.log_to_file:
+            self._setup_file_logging(config)
 
         try:
             if len(module_objects) > 1:
