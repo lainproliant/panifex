@@ -12,10 +12,11 @@ import inspect
 import logging
 import sys
 from datetime import date
-from typing import Any, List
+from typing import Any, List, Dict
 
 import xeno
 from ansilog import bg, fg, Formatter
+from collections import defaultdict
 
 from .config import Config
 from .errors import AggregateError, BuildError
@@ -65,6 +66,7 @@ class BuildEngine:
         Recipe.cleaning = False
         self._injector = xeno.Injector()
         self._cache = {}
+        self._cache_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._temps = []
 
     def temp(self, f):
@@ -225,11 +227,11 @@ class BuildEngine:
 
     async def _resolve_resource(self, name, value=xeno.NOTHING, alias=None, targeted=False):
         name = alias or name
-        if name in self._cache and not Recipe.cleaning:
-            value = self._cache[name]
+        async with self._cache_locks[name]:
+            if name in self._cache and not Recipe.cleaning:
+                return self._cache[name]
 
-        else:
-            value = (
+            provided_value = (
                 await self._injector.require_async(name)
                 if value is xeno.NOTHING
                 else value
@@ -238,15 +240,15 @@ class BuildEngine:
             try:
                 if not Recipe.cleaning or targeted:
                     log.info(fg.blue('[..]') + ' ' + name)
-                value = self._cache[name] = await self._deep_resolve(value, targeted)
+                final_value = self._cache[name] = await self._deep_resolve(provided_value, targeted)
                 if not Recipe.cleaning:
                     log.info(fg.green('[ok]') + ' ' + name)
+
+                return final_value
 
             except Exception as e:
                 log.info(fg.white(bg.red('[!!]')) + ' ' + name)
                 raise e
-
-        return value
 
     async def _deep_resolve(self, value, targeted=False):
         if isinstance(value, Recipe):
@@ -267,7 +269,7 @@ class BuildEngine:
 
     async def _intercept_coroutines(self, attrs, param_map, alias_map):
         return {
-            k: await self._resolve_resource(k, value=v, alias=alias_map[k])
+            k: await self._resolve_resource(k, value=xeno.NOTHING, alias=alias_map[k])
             for k, v in param_map.items()
         }
 
