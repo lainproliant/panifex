@@ -187,7 +187,7 @@ class BuildEngine:
             targets = [config.target]
 
         if Recipe.cleaning:
-            targets = [t for t in targets if t not in keepers or t == config.target]
+            targets = [t for t in targets if t not in keepers]
 
         for target in targets:
             if target not in defined_targets:
