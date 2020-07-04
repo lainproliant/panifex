@@ -11,7 +11,7 @@ import asyncio
 import inspect
 import logging
 import sys
-from datetime import date
+from datetime import datetime
 from typing import Any, List, Dict
 
 import xeno
@@ -24,6 +24,7 @@ from .recipes import Recipe, RecipeHistory
 from .util import get_logger, is_iterable
 
 # --------------------------------------------------------------------
+TARGET = "panifex.target"
 DEFAULT_TARGET = "panifex.default_target"
 KEEP = "panifex.keep"
 
@@ -34,14 +35,21 @@ file_logging_setup = False
 
 
 # -------------------------------------------------------------------
-def default(f):
+def _target(f):
     attrs = xeno.MethodAttributes.for_method(f, create=True, write=True)
-    attrs.put(DEFAULT_TARGET)
+    attrs.put(TARGET)
     return f
 
 
 # -------------------------------------------------------------------
-def keep(f):
+def _default(f):
+    attrs = xeno.MethodAttributes.for_method(f, create=True, write=True)
+    attrs.put(DEFAULT_TARGET)
+    return _target(f)
+
+
+# -------------------------------------------------------------------
+def _keep(f):
     attrs = xeno.MethodAttributes.for_method(f, create=True, write=True)
     attrs.put(KEEP)
     return f
@@ -69,6 +77,15 @@ class BuildEngine:
         self._cache_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._temps = []
 
+    def default(self, f):
+        self._injector.provide(_default(f))
+
+    def target(self, f):
+        self._injector.provide(_target(f))
+
+    def provide(self, f):
+        self._injector.provide(f)
+
     def temp(self, f):
         @xeno.MethodAttributes.wraps(f)
         async def wrapper(*args, **kwargs):
@@ -80,6 +97,9 @@ class BuildEngine:
             return result
 
         return wrapper
+
+    def keep(self, f):
+        return _keep(f)
 
     # pylint: disable=R0201
     def noclean(self, f):
@@ -95,29 +115,24 @@ class BuildEngine:
         return log
 
     def _setup_file_logging(self, config: Config):
-        filename = 'panifex-%s.log' % date.today().isoformat()
+        filename = '%s-%s.log' % (config.log_to_file, datetime.today().isoformat())
         file_handler = logging.FileHandler(filename, mode='w')
         file_handler.setFormatter(Formatter(file_handler.stream))
         log.addHandler(file_handler)
+        log.info("Logging to file: %s", filename)
 
     def __call__(self, *module_objects):
         config = Recipe.config = Config().parse_args(self.name)
 
-        if config.log_to_file:
+        if len(config.log_to_file) > 0:
             self._setup_file_logging(config)
 
         try:
-            if len(module_objects) > 1:
-                def impl(module):
-                    modules = [
-                        obj() if inspect.isclass(obj) else obj for obj in module_objects
-                    ]
-                    return self._resolve_build(modules, config)
-                return impl
+            modules = [
+                obj() if inspect.isclass(obj) else obj for obj in module_objects
+            ]
 
-            module = module_objects[0]
-            module = module() if inspect.isclass(module) else module
-            result = self._resolve_build([module], config)
+            result = self._resolve_build(modules, config)
             log.info("")
             if Recipe.cleaning:
                 log.info(fg.green("CLEAN"))
@@ -158,67 +173,66 @@ class BuildEngine:
             self._initialize()
 
     def _resolve_build(self, modules: List[Any], config: Config):
-        if not modules:
-            raise BuildError("At least one build class or object must be provided.")
-
         Recipe.cleaning = config.cleaning or config.clean_all
 
-        main_module, *support_modules = modules
-        default_target, defined_targets = self._patch_module(main_module, main_module=True)
-        for module in support_modules:
+        for module in modules:
             self._patch_module(module)
-        self._injector.add_async_injection_interceptor(self._intercept_coroutines)
-        self._injector.add_module(main_module, skip_cycle_check=True)
-        for module in support_modules:
             self._injector.add_module(module, skip_cycle_check=True)
+        self._injector.add_async_injection_interceptor(self._intercept_coroutines)
         self._injector.check_for_cycles()
 
         keepers = self._get_keepers()
 
         if not config.target:
-            if default_target:
-                config.target = default_target
+            if self._get_default_target():
+                config.target = self._get_default_target()
             else:
                 raise BuildError('No target was specified and no default target is defined.')
 
+        if config.target not in self._get_targets():
+            raise BuildError(f'Unknown target: "{config.target}".')
+
         if config.clean_all:
-            targets = defined_targets
+            resources = self._get_targets()
         elif not Recipe.cleaning:
-            targets = [*self._injector.get_ordered_dependencies(config.target), config.target]
+            resources = [*self._injector.get_ordered_dependencies(config.target), config.target]
         else:
-            targets = [config.target]
+            resources = [config.target]
 
         if Recipe.cleaning:
-            targets = [t for t in targets if t not in keepers]
-
-        for target in targets:
-            if target not in defined_targets:
-                raise BuildError(f'Unknown target: "{target}".')
+            resources = [t for t in resources if t not in keepers]
 
         loop = asyncio.get_event_loop()
         result_map = {
-            target: loop.run_until_complete(self._resolve_resource(target, targeted=True))
-            for target in targets
+            resource: loop.run_until_complete(self._resolve_resource(resource, targeted=True))
+            for resource in resources
         }
         loop.run_until_complete(self._cleanup_temps())
 
         return result_map
 
-    def _patch_module(self, module, main_module=False):
+    def _patch_module(self, module):
         """Patch the modules so that all methods not starting with underscore
         are modded to be Xeno providers."""
-        default_target = None
-        targets = []
         cls = type(module)
         for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
             if not name.startswith("_"):
-                setattr(cls, name, xeno.singleton(method))
-                attrs = xeno.MethodAttributes.for_method(method)
-                name = attrs.get("name")
-                targets.append(name)
-                if main_module and attrs.check(DEFAULT_TARGET):
-                    default_target = name
-        return default_target, targets
+                setattr(cls, name, target(xeno.singleton(method)))
+
+    def _get_targets(self):
+        """Get all resources tagged as 'targets'."""
+
+        return {k for k, v in self._injector.scan_resources(lambda key, att: att.check(TARGET))}
+
+    def _get_default_target(self):
+        """Get the single resource marked as the default target."""
+        default_targets = [k for k, v in self._injector.scan_resources(
+            lambda key, att: att.check(DEFAULT_TARGET))]
+        if len(default_targets) > 1:
+            raise BuildError(
+                'More than one target is specified as a default target: %s'
+                % repr(default_targets))
+        return default_targets[0] if default_targets else []
 
     def _get_keepers(self):
         """Get all resources tagged as 'keepers', these will only be cleaned when
@@ -282,4 +296,8 @@ class BuildEngine:
 
 # -------------------------------------------------------------------
 build = BuildEngine()
+default = build.default
+target = build.target
+provide = build.provide
+keep = build.keep
 seq = Sequential

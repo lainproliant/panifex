@@ -7,6 +7,6 @@
 # Released under a 3-clause BSD license, see LICENSE for more info.
 # -------------------------------------------------------------------
 
-from .build import build, default, seq, keep
+from .build import build, default, provide, target, seq, keep
 from .shell import sh, ShellReport
 temp = build.temp

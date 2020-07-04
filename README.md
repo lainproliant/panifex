@@ -92,8 +92,10 @@ In the above example, the following usage patterns are presented:
     rather it receives a list containing all of the outputs specified by each
     recipe, that being a list of object filenames.
 
-More examples and usage info coming soon!
-
 ## Release Notes
-### v0.1: 01/02/20
+### v0.8: 07/04/2020 
+- Updated to support Xeno's new function providers, builds no longer have to be
+  modeled as classes, but `build()` must be called at the end of the script.
+
+### v0.1: 01/02/2020
 - Initial release.
