@@ -61,3 +61,11 @@ def setup_temp_logger():
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     return logger, tmp.name
+
+
+# --------------------------------------------------------------------
+def decode(b: bytes) -> str:
+    try:
+        return b.decode('utf-8')
+    except UnicodeDecodeError:
+        return b.decode('ISO-8859-1')

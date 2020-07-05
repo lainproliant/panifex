@@ -20,7 +20,7 @@ from .config import CPU_CORES
 from .errors import BuildError
 from .recipes import FileRecipe
 from .reports import Report
-from .util import digest_env, format_dt, get_logger, is_iterable
+from .util import digest_env, format_dt, get_logger, is_iterable, decode
 
 # -------------------------------------------------------------------
 LineSinkFunction = Callable[[str], None]
@@ -130,7 +130,7 @@ class ShellOutputCollector:
                 stream, sink_f = self._readline_tasks.pop(future)
                 line = future.result()
                 if line:
-                    line = line.decode("utf-8").strip()
+                    line = decode(line).strip()
                     sink_f(line)
                     self._setup_readline_task(stream, sink_f)
 
