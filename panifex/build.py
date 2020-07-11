@@ -95,7 +95,7 @@ class BuildEngine:
             else:
                 self._temps.append(result)
             return result
-
+        self.provide(wrapper)
         return wrapper
 
     def keep(self, f):
