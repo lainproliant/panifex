@@ -93,6 +93,9 @@ In the above example, the following usage patterns are presented:
     recipe, that being a list of object filenames.
 
 ## Release Notes
+### v1.0: 07/10/2020
+- ***BACKWARDS INCOMPATIBLE CHANGE***: End support for class based build modules.
+
 ### v0.8: 07/04/2020 
 - Updated to support Xeno's new function providers, builds no longer have to be
   modeled as classes, but `build()` must be called at the end of the script.

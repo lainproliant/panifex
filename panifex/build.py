@@ -121,18 +121,14 @@ class BuildEngine:
         log.addHandler(file_handler)
         log.info("Logging to file: %s", filename)
 
-    def __call__(self, *module_objects):
+    def __call__(self):
         config = Recipe.config = Config().parse_args(self.name)
 
         if len(config.log_to_file) > 0:
             self._setup_file_logging(config)
 
         try:
-            modules = [
-                obj() if inspect.isclass(obj) else obj for obj in module_objects
-            ]
-
-            result = self._resolve_build(modules, config)
+            result = self._resolve_build(config)
             log.info("")
             if Recipe.cleaning:
                 log.info(fg.green("CLEAN"))
@@ -172,12 +168,9 @@ class BuildEngine:
             Recipe.config = Config()
             self._initialize()
 
-    def _resolve_build(self, modules: List[Any], config: Config):
+    def _resolve_build(self, config: Config):
         Recipe.cleaning = config.cleaning or config.clean_all
 
-        for module in modules:
-            self._patch_module(module)
-            self._injector.add_module(module, skip_cycle_check=True)
         self._injector.add_async_injection_interceptor(self._intercept_coroutines)
         self._injector.check_for_cycles()
 
@@ -210,14 +203,6 @@ class BuildEngine:
         loop.run_until_complete(self._cleanup_temps())
 
         return result_map
-
-    def _patch_module(self, module):
-        """Patch the modules so that all methods not starting with underscore
-        are modded to be Xeno providers."""
-        cls = type(module)
-        for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
-            if not name.startswith("_"):
-                setattr(cls, name, target(xeno.singleton(method)))
 
     def _get_targets(self):
         """Get all resources tagged as 'targets'."""
