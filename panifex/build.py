@@ -103,6 +103,7 @@ class BuildEngine:
 
     # pylint: disable=R0201
     def noclean(self, f):
+        @xeno.MethodAttributes.wraps(f)
         async def wrapper(*args, **kwargs):
             if Recipe.cleaning:
                 return None
@@ -285,4 +286,5 @@ default = build.default
 target = build.target
 provide = build.provide
 keep = build.keep
+noclean = build.noclean
 seq = Sequential
