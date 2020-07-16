@@ -11,12 +11,13 @@ import asyncio
 import inspect
 import logging
 import sys
+import textwrap
+from collections import defaultdict
 from datetime import datetime
-from typing import Any, List, Dict
+from typing import Dict
 
 import xeno
-from ansilog import bg, fg, Formatter
-from collections import defaultdict
+from ansilog import Formatter, bg, fg
 
 from .config import Config
 from .errors import AggregateError, BuildError
@@ -122,8 +123,30 @@ class BuildEngine:
         log.addHandler(file_handler)
         log.info("Logging to file: %s", filename)
 
+    def _list_targets(self):
+        self._injector.check_for_cycles()
+        targets = sorted(self._get_targets())
+
+        for target in targets:
+            attrs = self._injector.get_resource_attributes(target)
+
+            if attrs.check(DEFAULT_TARGET):
+                target += " (default)"
+
+            sys.stdout.write(str(fg.yellow(target)))
+            if attrs.get('doc'):
+                sys.stdout.write(': ')
+                doc = '\n'.join([line.strip() for line in attrs.get('doc').strip().splitlines()])
+                print(('\n' + ' ' * (len(target) + 2)).join(textwrap.wrap(doc, 70 - len(target) - 2)))
+            else:
+                print()
+
     def __call__(self):
         config = Recipe.config = Config().parse_args(self.name)
+
+        if config.list_targets:
+            self._list_targets()
+            return None
 
         if len(config.log_to_file) > 0:
             self._setup_file_logging(config)

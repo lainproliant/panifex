@@ -29,6 +29,7 @@ class Config:
         self.cleaning = False
         self.clean_all = False
         self.verbose = False
+        self.list_targets = False
         self.log_to_file = ""
 
     @classmethod
@@ -37,7 +38,8 @@ class Config:
         parser.add_argument("target", metavar="target", nargs="?", default=None)
         parser.add_argument("-C", "--clean-target", dest="cleaning", action="store_true")
         parser.add_argument("-c", "--clean", dest="clean_all", action="store_true")
-        parser.add_argument('-v', "--verbose", default=False, action="store_true")
+        parser.add_argument('-v', "--verbose", action="store_true")
+        parser.add_argument('-l', "--list", dest="list_targets", action="store_true")
         parser.add_argument('-F', "--log-to-file", dest="log_to_file")
         return parser
 

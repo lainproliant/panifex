@@ -91,6 +91,9 @@ In the above example, the following usage patterns are presented:
     recipe, that being a list of object filenames.
 
 ## Release Notes
+### v1.1: 07/16/2020
+- Added `bake -l` to list targets and their docstrings.
+
 ### v1.0: 07/10/2020
 - ***BACKWARDS INCOMPATIBLE CHANGE***: End support for class based build modules.
 
