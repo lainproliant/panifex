@@ -262,15 +262,15 @@ class BuildEngine:
 
             try:
                 if not Recipe.cleaning or targeted:
-                    log.info(fg.blue('[..]') + ' ' + name)
+                    log.info(fg.blue('[..]') + ' ' + fg.yellow(name))
                 final_value = self._cache[name] = await self._deep_resolve(provided_value, targeted)
                 if not Recipe.cleaning:
-                    log.info(fg.green('[ok]') + ' ' + name)
+                    log.info(fg.green('[ok]') + ' ' + fg.yellow(name))
 
                 return final_value
 
             except Exception as e:
-                log.info(fg.white(bg.red('[!!]')) + ' ' + name)
+                log.info(fg.white(bg.red('[!!]')) + ' ' + fg.yellow(name))
                 raise e
 
     async def _deep_resolve(self, value, targeted=False):
