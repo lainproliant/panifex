@@ -1,58 +1,119 @@
-# Panifex: A Python Build System Version 2.0
+# Panifex: A Python Build Automation System -- Version 2.0
 - Author: Lain Musgrove
 - License: MIT, see LICENSE
 
 ## Overview
-Panifex is a Python build system that easily allows you to tie together
-various parts of a multi-stage build and to create reusable recipes.  Like the
-tool it is inspired by, `make`, it is best for shell-based build processes like
-compiling code, making packages, and performing pre-defined tasks, though it
-is not limited to running shell commands.
+> (panifex m (genitive panificis); third declension)
+>   1. a baker, breadmaker
 
-Panifex 2 has been rewritten around the concept of Recipes and Artifacts, and
-overcomes some of the major limitations of 1.x versions, such as an
-intertwined resource injection and build resolution process that limited its
-flexibility.
+Panifex is a build automation system built around recipes and their resulting
+artifacts.
 
-Panifex doesn't come with its own build recipes, but encourages the definition
-and sharing of build recipes, targets, and resources via Python modules.  A
-list of known recipe modules will be included here when they become available.
+Panifex is built atop [Xeno](https://github.com/lainproliant/xeno), a
+Python-based dependency injection framework, which it uses to semantically
+construct recipes based on a tree of dependencies.
+
+Like in `make(3)`, build targets are defined by instructions used to construct
+them and their dependencies.  Unlike `make(3)`, these relationships are defined
+in Python code, and targets can be either shell-based recipes or custom
+recipies written in Python.
+
+Like `make(3)`, Panifex determines if a recipe needs to be re-built by
+comparing the age of the artifacts if they exist and the artifacts of all
+dependant recipes.
+
+## Installation
+Panifex requires python-3.8 or later.  To install, simply run:
+
+```sh
+sudo pip install panifex
+```
+
+## Simple Example
+```python
+from panifex import build, target, sh
+
+@target
+def hello():
+    return sh("echo 'Hello' >> {output}",
+              output='hello.txt')
+
+@target
+def world():
+    return sh("echo 'World' >> {output}",
+              output='hello.txt')
+
+@target
+def hello_world(hello, world):
+    return sh("cat {input} >> {output}",
+              input=[hello, world],
+              output='helloworld.txt')
+
+build(hello_world)
+```
+
+To run this example, copy it into a file called `bake.py`, then run `bake`[^1] on
+the command line.
+
+```sh
+bake
+```
+
+In this example, we're using `sh()`, which is the shell recipe factory.  The
+parameters `input=` and `output=` are special for `sh()`, because they define the
+dependencies and artifacts of the shell recipe respectively.[^2]  We define
+three targets: `hello`, `world`, and `hello_world` which is the default target.
+`hello_world` depends on the output of `hello` and `world` and uses them to
+construct a third file, `helloworld.txt`.
+
+The `@target` annotation is used to define the given function as a build
+target.  Each named parameter to the function must be the name of a target or
+other resource[^3], and is automatically provided with the value of that
+resource when it is being defined.  When specified on the command line by name,
+a target can be invoked.  The target and all of its dependencies will be built.
+If no target is specified, the target passed to `build()` is used by default.
+
+`build()` is the function that kicks off the build process, and should be
+placed in your `bake.py` after all of your targets are defined.
+
+[^1]: `bake` is a command provided by Panifex which executes `bake.py` in the
+  current directory if it exists, and has various switches for other operations
+  such as cleaning, listing targets, and printing a diagnostic build tree.  For
+  more information, run `bake --help`.
+
+[^2]: For shell recipes, `requires=` can be used to declare additional
+  dependencies, whether or not these dependencies are used in the actual shell
+  command.
+
+[^3]: Panifex also offers `@provide` for defining a resource that is available
+  but that is not a build target.  Usually, this is for statically defined
+  resources or enumerations that are not recipies, such as lists of input
+  files.
 
 ## Core Concepts
 ### Recipes
-A Recipe represents a repeatable parameterized process that may depend on the
-resolution of one or more other recipes (known as "inputs").  Each Recipe
-results in the creation of an Artifact (known as the "output") that represents
-its side-effects.  This is typically a FileArtifact representing a file on
-disk, but can also be a PolyArtifact bundling multiple result artifacts, a
-user-defined Artifact subclass representing pretty much anything, or a
-NullArtifact indicating that there are no side effects.
+A *recipe* represents a repeatable process that produces one or more artifacts.
 
 ### Artifacts
-Artifacts represent a (preferrably but not necessarily) reversable result of
-performing a Recipe.  Typically this will be a file on disk that can be
-deleted during the cleaning and/or purging process.
+Artifacts represent a potentially reversable result of a recipe.  Often they
+will represent a file or directory on disk that can be deleted by cleaning.
 
-### Resources (i.e. `@pfx.provide`)
-Resources can be recipes for specific artifacts or any other objects that are
-needed for building.  Resources are evaluated before recipes are resolved, so
-it is important not to depend on the results of a recipe in your providers.
+### Resources and Targets
+*Resources* (via `@provide`) are functions that return recipes or other data
+needed by other parts of your build process.  *Targets* (via `@target`) are
+resources that can be invoked as build targets via the `bake` command.
 
-Resources may depend on other resources, and are evaluated using Xeno
-dependency injection.  They can be defined as normal functions or `asyncio`
-coroutines, and have their parameters automatically inserted by name
-based on the name of other resources that are defined.  If any parameter
-names are not defined as resources, a `xeno.MissingDependencyError` is thrown.
+Resources can return recipes or any other objects that are needed for building, though *targets* must return a recipe.
 
-For more information about the Xeno DI framework, see [https://github.com/lainproliant/Xeno](Xeno on Github).
+Resources are evaluated before recipes are resolved, so it is important not to
+depend on the results of a recipe in your providers.
 
-### Targets (i.e., `@pfx.target`)
-Targets are like resources in that they are injected with resources or other
-targets, but _must_ reutrn a Recipe object.  The names of `@pfx.target`
-decorated functions define the list of available build targets when running
-`bake`.  When calling `pfx.build` in `bake.py`, one of the names of a defined
-target can be provided indicating that this is the default target to be
-resolved if no other targets are specified on the command line.
+Resources may depend on other resources, and are evaluated using
+[Xeno](https://github.com/lainproliant/xeno).  They can be defined as normal
+functions or `asyncio` coroutines, and have their parameters automatically
+inserted by name based on the name of other resources that are defined.  If any
+parameter names are not defined as resources, a `xeno.MissingDependencyError`
+is thrown.
 
 ### Contextual Inferences
 While some situations will require you to extend `pfx.recipes.Recipe` and
@@ -65,18 +126,17 @@ inferred that this value refers to a FileArtifact.  In the case of `output`,
 it indicates that the given value is the file or file(s) that are created as a
 result of resolving the recipe.
 
-Most critically, when a `Recipe` is provided as the `input`, `requires`, TODO 
-
-## Example Usage
+## Concrete Example
 The following example defines a `bake.py` script that builds a tetris game from
 its project root directory:
 
-```
+```python
 #!/usr/bin/env python
-from panifex import build, sh, provide, target, default
+from panifex import build, sh, provide, target, recipe
 
 sh.env(CC="clang", CFLAGS=("-g", "-I./include"), LDFLAGS=("-lncurses", "-lpanel"))
 
+@recipe
 def compile(src):
     return sh(
         "{CC} -c {CFLAGS} {input} -o {output}",
@@ -84,6 +144,7 @@ def compile(src):
         output=Path(src).with_suffix(".o"),
     )
 
+@recipe
 def link(executable, objects):
     return sh("{CC} {LDFLAGS} {input} -o {output}", input=objects, output=executable)
 
@@ -95,65 +156,19 @@ def sources():
 def objects(sources):
     return [compile(src) for src in sources]
 
-@default
+@target
 def executable(objects):
-    return link("ntetris2", objects)
+    return link("ntetris", objects)
 
-build()
+build(executable)
 ```
 
-In the above example, the following usage patterns are presented:
-
-- `build`, `sh`, `provide`, `target`, and `default` are imported from `panifex`
-    - `build` is the default build factory that `provide`, `target`, and `default`
-      are bound to, and the functor that we'll need to invoke once we've defined
-      all of our provides and targets.
-    - `sh` is a recipe factory for generating shell-based file recipes.
-    - `provide` indicates that the function provides a resource needed by other
-      resources or targets, but that it is not a targetable build artifact.
-    - `target` indicates that the function provides a resource needed by
-      other resources or targets, and that it is a targetable build artifact.
-    - `default` indicates that this function is the default targetable build
-      artifact, and will be built if no targets are explicitly specified
-      when invoking `bake`.
-- `CC`, `CFLAGS`, and `LDFLAGS` are defined as environment variables through
-    `sh.env`.  `sh.env` extends the environment of the `sh` recipe factory with
-    additional variables that are interpolated into the command string and added
-    to the environment of commands run with this factory.  In addition to OS
-    environment variables which are added automatically as strings, lists or
-    tuples can be specified in `sh.env` which will be interpolated correctly
-    into command format strings.
-- `compile` is defined.  It is a normal function which calls the `sh` factory to
-    generate a recipe for creating an `.o` output file for the given source
-    file.  `compile` is referred to as a "recipe function", because it is a
-    function that generates a recipe from arguments.  Calling this function
-    itself does not run any commands, but instead the recipe generated should be
-    returned from a build target, where it can be built in parallel with other
-    dependencies in the overall dependency tree.  The `input` and `output`
-    parameters to `sh` are special and essential:
-    - `output` specifies the name of the file that will be generated by the
-        shell recipe.  This is used to determine if the recipe actually needs
-        to be run, and identifies the file that should be cleaned up while
-        cleaning.
-    - `input` is optional, and specifies the file(s) that will be used to
-        create the output.  If the output already exists but any of the input
-        files are newer, the output will be re-created.
-- `link` is defined as another recipe function for creating the final executable
-    from a list of object files.
-- `sources` is a provider.  It defines the list of source files to be built.
-- `objects` is the first target.  It depends on `sources` because it has a
-    parameter named `sources` which is automatically injected with the result
-    from `sources`, that being a list of source filenames.  It uses `compile` to
-    create a list of recipes and returns them.  Panifex will build these recipes
-    in parallel, spawning at maximum as many simultaneous processes as the
-    system has available processor cores.
-- `executable` is the default target.  It depends on `objects`, and as such won't
-    actually run until all of the object file recipes generated by `objects` are
-    done building.  `executable` doesn't receive the list of object recipes,
-    rather it receives a list containing all of the outputs specified by each
-    recipe, that being a list of object filenames.
+An even richer example can be found in the [bake.py for Jotdown on Github](https://github.com/lainproliant/jotdown/blob/master/bake.py).
 
 ## Release Notes
+### v2.0: 09/17/2020
+- ***BACKWARDS INCOMPATIBLE CHANGE***: Switch to Recipes and Artifacts model after major refactoring.
+
 ### v1.0: 07/10/2020
 - ***BACKWARDS INCOMPATIBLE CHANGE***: End support for class based build modules.
 
