@@ -9,11 +9,24 @@
 
 import subprocess
 import sys
+from pathlib import Path
 
+from .config import Config
+
+log = Config.get().get_logger("panifex.bake")
 
 # --------------------------------------------------------------------
 def main():
-    subprocess.call(['python', 'bake.py', *sys.argv[1:]])
+    config = Config.get()
+
+    if config.help:
+        config.print_help()
+        return
+
+    if Path('bake.py').exists():
+        subprocess.call(['python', 'bake.py', *sys.argv[1:]])
+    else:
+        log.error("There is no 'bake.py' in the current directory.")
 
 
 # --------------------------------------------------------------------

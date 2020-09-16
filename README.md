@@ -1,8 +1,71 @@
-# Panifex: A Python Build System
+# Panifex: A Python Build System Version 2.0
+- Author: Lain Musgrove
+- License: MIT, see LICENSE
+
 ## Overview
-Panifex is a Python build system that easily allows you to tie together various
-parts of a multi-stage build and to create reusable recipes.  It is a good
-replacement for `make` and related tools.
+Panifex is a Python build system that easily allows you to tie together
+various parts of a multi-stage build and to create reusable recipes.  Like the
+tool it is inspired by, `make`, it is best for shell-based build processes like
+compiling code, making packages, and performing pre-defined tasks, though it
+is not limited to running shell commands.
+
+Panifex 2 has been rewritten around the concept of Recipes and Artifacts, and
+overcomes some of the major limitations of 1.x versions, such as an
+intertwined resource injection and build resolution process that limited its
+flexibility.
+
+Panifex doesn't come with its own build recipes, but encourages the definition
+and sharing of build recipes, targets, and resources via Python modules.  A
+list of known recipe modules will be included here when they become available.
+
+## Core Concepts
+### Recipes
+A Recipe represents a repeatable parameterized process that may depend on the
+resolution of one or more other recipes (known as "inputs").  Each Recipe
+results in the creation of an Artifact (known as the "output") that represents
+its side-effects.  This is typically a FileArtifact representing a file on
+disk, but can also be a PolyArtifact bundling multiple result artifacts, a
+user-defined Artifact subclass representing pretty much anything, or a
+NullArtifact indicating that there are no side effects.
+
+### Artifacts
+Artifacts represent a (preferrably but not necessarily) reversable result of
+performing a Recipe.  Typically this will be a file on disk that can be
+deleted during the cleaning and/or purging process.
+
+### Resources (i.e. `@pfx.provide`)
+Resources can be recipes for specific artifacts or any other objects that are
+needed for building.  Resources are evaluated before recipes are resolved, so
+it is important not to depend on the results of a recipe in your providers.
+
+Resources may depend on other resources, and are evaluated using Xeno
+dependency injection.  They can be defined as normal functions or `asyncio`
+coroutines, and have their parameters automatically inserted by name
+based on the name of other resources that are defined.  If any parameter
+names are not defined as resources, a `xeno.MissingDependencyError` is thrown.
+
+For more information about the Xeno DI framework, see [https://github.com/lainproliant/Xeno](Xeno on Github).
+
+### Targets (i.e., `@pfx.target`)
+Targets are like resources in that they are injected with resources or other
+targets, but _must_ reutrn a Recipe object.  The names of `@pfx.target`
+decorated functions define the list of available build targets when running
+`bake`.  When calling `pfx.build` in `bake.py`, one of the names of a defined
+target can be provided indicating that this is the default target to be
+resolved if no other targets are specified on the command line.
+
+### Contextual Inferences
+While some situations will require you to extend `pfx.recipes.Recipe` and
+`pfx.artifacts.Artifact` to define your own specialized versions of these
+concepts, most of the time `FileArtifact`, `ValueArtifact`, and simple recipes
+can be constructed using contextual inferences.  For example, when a string or
+`pathlib.Path` object is passed in the `output`, `input`, or `requires`
+parameters of a `ShellRecipe` (created via `sh` or the `ShellFactory`), it is
+inferred that this value refers to a FileArtifact.  In the case of `output`,
+it indicates that the given value is the file or file(s) that are created as a
+result of resolving the recipe.
+
+Most critically, when a `Recipe` is provided as the `input`, `requires`, TODO 
 
 ## Example Usage
 The following example defines a `bake.py` script that builds a tetris game from

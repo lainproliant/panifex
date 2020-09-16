@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------
-# shell.py: Shell command execution tools, including ShellRecipe.
+# shell.py
 #
 # Author: Lain Musgrove (lain.proliant@gmail.com)
 # Date: Wednesday, August 12 2020
@@ -7,21 +7,43 @@
 # Distributed under terms of the MIT license.
 # --------------------------------------------------------------------
 import asyncio
-import itertools
 import os
 import shlex
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple, Union
 
-from .config import CPU_CORES
-from .recipes import Artifact, File, Recipe
+from ansilog import fg
+
+from .artifacts import (
+    Artifact,
+    EnvironmentDict,
+    FileArtifact,
+    NullArtifact,
+    PolyArtifact,
+    as_artifact,
+    digest_env,
+    digest_param,
+    digest_param_map,
+)
+from .config import Config
+from .recipes import Recipe
 from .util import decode, is_iterable
+from .errors import BuildError
 
 # -------------------------------------------------------------------
 LineSinkFunction = Callable[[str], None]
 OutputTaskData = Tuple[asyncio.StreamReader, LineSinkFunction]
+ArtifactOrPath = Union[str, Path, Artifact]
+
+# --------------------------------------------------------------------
+log = Config.get().get_logger("panifex.shell")
+
+
+# --------------------------------------------------------------------
+def check(cmd):
+    return subprocess.check_output(shlex.split(cmd)).decode("utf-8").strip()
 
 
 # --------------------------------------------------------------------
@@ -126,83 +148,185 @@ class AsyncOutputCollector(OutputCollector):
 
 # -------------------------------------------------------------------
 class ShellResult(Artifact):
-    def __init__(self, files: List[File] = [], stdout=True, stderr=False):
-        self.returncode: Optional[int] = None
-        self._files = files
-        self._stdout = stdout
-        self._stderr = stderr
-        self.output: Optional[OutputSink] = None
+    def __init__(self, file: Artifact = NullArtifact()):
+        if not (file.is_null or isinstance(file, FileArtifact)):
+            raise ValueError("File must be null or a FileArtifact.")
+        self._returncode: Optional[int] = None
+        self._file = file
+        self._sink: OutputSink = NullOutputSink()
+
+    @property
+    def returncode(self) -> int:
+        if self._returncode is None:
+            raise ValueError("Return code has not yet been received.")
+        return self._returncode
+
+    @returncode.setter
+    def returncode(self, code: int):
+        if self._returncode is not None:
+            raise ValueError("Return code has already been set.")
+        self._returncode = code
+
+    @property
+    def has_returncode(self) -> bool:
+        return self._returncode is not None
 
     @property
     def exists(self) -> bool:
-        return self.returncode is not None and all(f.exists for f in self._files)
+        return self._file.exists
+
+    @property
+    def file(self) -> Artifact:
+        return self._file
+
+    @property
+    def sink(self) -> OutputSink:
+        return self._sink
+
+    @sink.setter
+    def sink(self, output_sink: OutputSink):
+        self._sink = output_sink
+
+    @property
+    def stdout(self) -> List[str]:
+        return list([l.line for l in self._sink.lines(stdout=True, stderr=False)])
+
+    @property
+    def stderr(self) -> List[str]:
+        return list([l.line for l in self._sink.lines(stdout=False, stderr=True)])
 
     @property
     def age(self) -> timedelta:
-        return min(f.age for f in self._files) if self._files else timedelta.max
+        if not self.file.is_null:
+            return self.file.age
+        return timedelta.max
+
+    def to_params(self) -> List[str]:
+        return self.file.to_params()
 
     async def clean(self):
-        await asyncio.gather(*(f.clean() for f in self._files))
+        await self.file.clean()
 
-    def to_param(self):
-        if self._files:
-            return [*itertools.chain(*[f.to_param() for f in self._files])]
-        if self.output is not None:
-            return [
-                line.line
-                for line in self.output.lines(stdout=self._stdout, stderr=self._stderr)
-            ]
-        raise ValueError("ShellResult has no results.")
+    def __repr__(self):
+        return "<{%s} (%s) [%s]}>" % (
+            self.__class__.__name__,
+            self.returncode if self.has_returncode else "?",
+            self.file,
+        )
 
 
 # -------------------------------------------------------------------
 class ShellRecipe(Recipe):
-    _limiter = asyncio.BoundedSemaphore(CPU_CORES)
+    _limiter = asyncio.BoundedSemaphore(Config.get().cpu_cores)
 
     def __init__(
         self,
         cmd: str,
         cwd: Optional[Path] = None,
-        env: Optional[Dict[str, str]] = {},
-        input: Optional[str] = None,
-        outputs: Optional[List[File]] = None,
-        stdout=True,
-        stderr=False,
-        requires: Optional[List[Recipe]] = None,
+        env: Optional[EnvironmentDict] = {},
+        to_stdin: Optional[str] = None,
+        output: Optional[ArtifactOrPath] = None,
+        input: Any = None,
+        echo: bool = True,
+        success_codes: Set[int] = {0},
     ):
-        super().__init__(requires)
+        input_recipes = []
+        input_artifacts = []
+
+        if input is not None and is_iterable(input):
+            for item in input:
+                if isinstance(item, Recipe):
+                    input_recipes.append(item)
+                else:
+                    input_artifacts.append(as_artifact(item))
+        else:
+            if isinstance(input, Recipe):
+                input_recipes.append(input)
+            else:
+                input_artifacts.append(as_artifact(input))
+
+        super().__init__(input_recipes)
         self._cmd = cmd
         self._cwd = cwd or Path.cwd()
         self._env = env or {}
-        self._outputs = outputs or []
-        self._input = input
-        self._result = ShellResult(self._outputs, stdout=stdout, stderr=stderr)
+        self._inputs = input_artifacts
+        self._echo = echo
+        self._to_stdin: Optional[str] = to_stdin
+        self._result = ShellResult(as_artifact(output, True))
+        self._success_codes = success_codes
 
     @property
-    def creates(self) -> List[Artifact]:
-        return [self._result]
+    def display_info(self) -> str:
+        return self._interpolate_cmd()
+
+    @property
+    def is_done(self) -> bool:
+        if self._result.file.is_null:
+            return (
+                self._result._returncode is not None
+                and self._result._returncode in self._success_codes
+            )
+        return Recipe.is_done.fget(self)
+
+    @property
+    def ansi_display_info(self) -> str:
+        args = shlex.split(self._interpolate_cmd(colorize=True))
+        return f"{fg.magenta(args[0])} {' '.join(str(arg) for arg in args[1:])}"
+
+    @property
+    def output(self) -> Artifact:
+        return self._result
+
+    @property
+    def input(self) -> Artifact:
+        return PolyArtifact([Recipe.input.fget(self), *self._inputs])
+
+    def _interpolate_cmd(self, colorize=False) -> str:
+        input_param = shlex.join(digest_param(self.input, self._cwd))
+        output_param = shlex.join(digest_param(self.output, self._cwd))
+
+        if colorize:
+            input_param = fg.cyan(input_param)
+            output_param = fg.green(output_param)
+
+        return self._cmd.format(**{"input": input_param, "output": output_param})
 
     async def make(self):
-        await self._limiter.acquire()
+        log.debug("Entering ShellRecipe.make()")
+        if self._result.has_returncode:
+            if self._result.returncode in self._success_codes:
+                log.debug("ShellRecipe has already been completed.")
+                return
+            raise BuildError("ShellRecipe has failed previously.")
+
         try:
+            await self._limiter.acquire()
             proc = await asyncio.create_subprocess_shell(
-                self._cmd,
+                self._interpolate_cmd(),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=self._env,
+                env=digest_env(self._env),
                 shell=True,
             )
 
-            if self._input is not None and proc.stdin is not None:
-                proc.stdin.write(self._input.encode("utf-8"))
+            if self._to_stdin is not None and proc.stdin is not None:
+                proc.stdin.write(self._to_stdin.encode("utf-8"))
 
             collector = AsyncOutputCollector()
             sink = InMemoryOutputSink()
             await collector.collect(proc, sink)
             await proc.wait()
             self._result.returncode = proc.returncode
-            self._result.output = sink
+            self._result.sink = sink
+            if self._result.returncode not in self._success_codes:
+                raise BuildError(
+                    "ShellCommand has failed (returncode: %d)" % self._result.returncode
+                )
+
+        except Exception as e:
+            log.exception("Failed to execute command: %s", self._cmd)
+            raise e
 
         finally:
             self._limiter.release()
@@ -212,22 +336,34 @@ class ShellRecipe(Recipe):
 class InteractiveShellRecipe(ShellRecipe):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self._input is not None:
-            raise ValueError("Interactive shell can't provide input programmatically.")
+        self.name = "sh"
+        if self._to_stdin is not None:
+            raise ValueError(
+                "Interactive shell can't provide to_stdin programmatically."
+            )
+
+    @property
+    def output(self) -> Artifact:
+        return NullArtifact()
 
     async def make(self):
         self._result.returncode = subprocess.call(
-            self._cmd, cwd=self._cwd, env=self._env, shell=True
+            self._interpolate_cmd(),
+            cwd=self._cwd,
+            env=digest_env(self._env),
+            shell=True,
         )
-        self._result.output = NullOutputSink()
+        self._result.sink = NullOutputSink()
+        if self._result.returncode not in self._success_codes:
+            raise BuildError(
+                "ShellCommand has failed (returncode: %d)" % self._result.returncode
+            )
 
 
 # -------------------------------------------------------------------
 class ShellFactory:
-    OUTPUT = "output"
-
-    def __init__(self, env: Optional[Dict[str, str]] = None):
-        self._env = {**os.environ, **(env or {})}
+    def __init__(self, env: Optional[EnvironmentDict] = None):
+        self._env: EnvironmentDict = {**os.environ, **(env or {})}
 
     def env(self, **kwargs):
         return ShellFactory({**self._env, **kwargs})
@@ -236,51 +372,33 @@ class ShellFactory:
     def __call__(
         self,
         cmd,
-        stdout=True,
-        stderr=False,
         cwd: Optional[Path] = None,
-        env: Optional[Dict[str, str]] = None,
-        input: Optional[str] = None,
-        output: Optional[Union[File, List[File]]] = None,
-        requires: Optional[List[Recipe]] = None,
+        env: Optional[EnvironmentDict] = None,
+        to_stdin: Optional[str] = None,
+        output: Optional[ArtifactOrPath] = None,
+        input: Optional[List[Any]] = None,
         interactive=False,
         echo=True,
-        **kwargs
+        **kwargs,
     ):
-        params = {**kwargs}
-        if isinstance(output, File):
-            output = [output]
-        if isinstance(output, list):
-            params[self.OUTPUT] = " ".join(shlex.quote(f.to_param()) for f in output)
-
-        env = {**self._env, **(env or {})}
-
-        for k, v in {**kwargs, **env, "output": output}.items():
-            if is_iterable(v):
-                params[k] = " ".join([shlex.quote(str(x)) for x in v])
-            else:
-                params[k] = shlex.quote(str(v))
+        output = as_artifact(output, True)
 
         cls = ShellRecipe
         if interactive:
             cls = InteractiveShellRecipe
 
+        env = {**self._env, **(env or {}), "input": "{input}", "output": "{output}"}
+
         return cls(
-            cmd=cmd.format(**params),
+            cmd=cmd.format(**digest_param_map({**kwargs, **env})),
             cwd=cwd,
             env=env,
+            to_stdin=to_stdin,
+            output=output,
             input=input,
-            outputs=output,
-            stdout=stdout,
-            stderr=stderr,
-            requires=requires
+            echo=echo,
         )
 
 
 # --------------------------------------------------------------------
 sh = ShellFactory()
-
-
-# --------------------------------------------------------------------
-def check(cmd):
-    return subprocess.check_output(shlex.split(cmd)).decode("utf-8").strip()
