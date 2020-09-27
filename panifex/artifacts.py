@@ -7,74 +7,24 @@
 # Distributed under terms of the MIT license.
 # --------------------------------------------------------------------
 import asyncio
-import shlex
-import shutil
-from datetime import datetime, timedelta
-from pathlib import Path
 from typing import (
     Any,
-    Dict,
     Generator,
     Generic,
     Iterable,
     List,
-    Optional,
-    Set,
     Tuple,
     TypeVar,
-    Union,
 )
 
-from ansilog import dim
-
+from datetime import timedelta
 from .config import Config
-from .util import badge, is_iterable, relative_to
+from .util import is_iterable, uniq
 
 # --------------------------------------------------------------------
 T = TypeVar("T")
-EnvironmentValue = Union[str, Set[str], Tuple[str], List[str]]
-EnvironmentDict = Dict[str, EnvironmentValue]
 
 log = Config.get().get_logger("panifex.artifacts")
-
-# --------------------------------------------------------------------
-def digest_env(env: EnvironmentDict) -> Dict[str, str]:
-    """Digest the given EnvironmentDict into a flat dictionary by joining any
-    iterable values into shell-escaped strings."""
-    result = {}
-    for key, value in env.items():
-        if isinstance(value, (list, set, tuple)):
-            result[key] = shlex.join(value)
-        else:
-            result[key] = value
-    return result
-
-
-# --------------------------------------------------------------------
-def digest_param(value: Any, cwd: Optional[Path] = None) -> List[str]:
-    """Digest the given parameter into a list of string values for command
-    interpolation."""
-    if is_iterable(value):
-        result = []
-        for p in value:
-            result.extend(digest_param(p, cwd))
-        return result
-    if isinstance(value, Artifact):
-        return digest_param(value.to_params(), cwd)
-    if cwd is not None and isinstance(value, Path):
-        return digest_param(str(relative_to(cwd, value)), cwd)
-    return [str(value)]
-
-
-# --------------------------------------------------------------------
-def digest_param_map(
-    param_map: Dict[str, Any], cwd: Optional[Path] = None
-) -> Dict[str, str]:
-    result = {}
-    for key, value in param_map.items():
-        result[key] = shlex.join(digest_param(value, cwd))
-    return result
-
 
 # --------------------------------------------------------------------
 class Artifact:
@@ -162,50 +112,6 @@ class NullArtifact(Artifact):
 
 
 # --------------------------------------------------------------------
-class FileArtifact(Artifact):
-    """ Represents a file or directory output from a recipe. """
-
-    def __init__(self, path: Path):
-        self.path = path
-
-    @property
-    def exists(self) -> bool:
-        return self.path.exists()
-
-    @property
-    def age(self) -> timedelta:
-        if not self.exists:
-            return timedelta.max
-        return datetime.now() - datetime.fromtimestamp(self.path.stat().st_mtime)
-
-    @property
-    def value(self) -> Any:
-        return self.path
-
-    async def clean(self):
-        if self.exists:
-            log.info(
-                f"{badge(dim('delete'))} {dim(digest_param(self.path, Path.cwd())[0])}"
-            )
-            if self.path.is_dir():
-                shutil.rmtree(self.path)
-            else:
-                self.path.unlink()
-
-    def __repr__(self):
-        return f"<FileArtifact {str(self.path)}>"
-
-    def __str__(self):
-        return str(self.path)
-
-    def to_params(self) -> List[Any]:
-        return [self.path]
-
-    def __hash__(self) -> int:
-        return hash(self.path)
-
-
-# --------------------------------------------------------------------
 class PolyArtifact(Artifact):
     """ Represents a compound collection of none or more artifacts. """
     @classmethod
@@ -219,7 +125,7 @@ class PolyArtifact(Artifact):
                 yield artifact
 
     def __init__(self, artifacts: Iterable[Artifact]):
-        self._artifacts = tuple(set(self._find_leaves(artifacts)))
+        self._artifacts = tuple(uniq(self._find_leaves(artifacts)))
 
     async def clean(self):
         await asyncio.gather(*(a.clean() for a in self._artifacts))
@@ -247,10 +153,12 @@ class PolyArtifact(Artifact):
 
     def __repr__(self):
         sep = ", "
+        if not self._artifacts:
+            return "<PolyArtifact of (nothing)"
         return f"<PolyArtifact of {sep.join(repr(a) for a in self._artifacts)}>"
 
     def to_params(self) -> List[Any]:
-        params = []
+        params: List[str] = []
         for artifact in self._artifacts:
             params.extend(artifact.to_params())
         return params
@@ -265,19 +173,3 @@ class PolyArtifact(Artifact):
     @property
     def is_null(self) -> bool:
         return not any(not a.is_null for a in self._artifacts)
-
-
-# --------------------------------------------------------------------
-def as_artifact(obj: T, str_as_file=False) -> Artifact:
-    """ Interpret the given parameter as an artifact.  If str_as_file is True,
-    any string values will be interpreted as relative paths to files and
-    generate FileArtifacts.. """
-    if obj is None:
-        return NullArtifact()
-    if isinstance(obj, Artifact):
-        return obj
-    if isinstance(obj, Path):
-        return FileArtifact(obj)
-    if isinstance(obj, str) and str_as_file:
-        return FileArtifact(Path(obj))
-    return ValueArtifact(obj)

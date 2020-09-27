@@ -11,3 +11,9 @@
 # --------------------------------------------------------------------
 class BuildError(Exception):
     pass
+
+# --------------------------------------------------------------------
+class InvalidTargetError(Exception):
+    def __init__(self, name):
+        self.name = name
+        super().__init__("'%s' is not a valid target: %s", name)

@@ -8,7 +8,10 @@
 # --------------------------------------------------------------------
 import inspect
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator, Iterable, List, Set, TypeVar
+
+# --------------------------------------------------------------------
+T = TypeVar("T")
 
 # --------------------------------------------------------------------
 def relative_to(pivot: Path, path: Path) -> Path:
@@ -34,3 +37,19 @@ def decode(b: bytes) -> str:
         return b.decode("utf-8")
     except UnicodeDecodeError:
         return b.decode("ISO-8859-1")
+
+
+# --------------------------------------------------------------------
+def uniq(it: Iterable[T]) -> Generator[T, None, None]:
+    """Filter the given iterable preserving order by removing
+    any subsequent items already encountered."""
+
+    visited: Set[T] = set()
+    for x in it:
+        if x not in visited:
+            visited.add(x)
+            yield x
+
+# --------------------------------------------------------------------
+def uniq_list(it: Iterable[T]) -> List[T]:
+    return list(uniq(it))

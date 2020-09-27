@@ -29,9 +29,9 @@ options below is specified.
   (or default) target.
 
 ## Options
-- `-c, --clean`: Clean the outputs of the given (or default) target.
-- `-X, --purge`: Clean the ouptuts of the given (or default) target and
-  all dependant resources and targets.
+- `-c, --clean`: Clean the outputs of the given (or default) target and all
+  dependent resources and targets.
+- `-x, --clean-target`: Clean the outputs only of the given target.
 - `-v, --verbose`: Print extra information at run time.
 - `-q, --quiet`: Print nothing during builds, unless something goes wrong.
 - `-m, -max`: Specifies the maximum number of simultaneously running sub shells.
@@ -82,8 +82,8 @@ class Config:
         parser = argparse.ArgumentParser(description=desc, add_help=False)
         parser.add_argument("targets", nargs="*", default=None)
         parser.add_argument("--help", "-h", dest="help", action="store_true")
-        parser.add_argument("--clean", "-c", dest="clean", action="store_true")
-        parser.add_argument("--purge", "-X", dest="purge", action="store_true")
+        parser.add_argument("--clean", "-c", dest="purge", action="store_true")
+        parser.add_argument("--purge", "-x", dest="clean", action="store_true")
         parser.add_argument("--verbose", "-v", dest="verbose", action="store_true")
         parser.add_argument("--quiet", "-q", dest="quiet", action="store_true")
         parser.add_argument("--tree", dest="print_tree", action="store_true")

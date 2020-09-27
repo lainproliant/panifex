@@ -3,7 +3,7 @@
 - License: MIT, see LICENSE
 
 ## Overview
-> (panifex m (genitive panificis); third declension)
+> (panifex (latin) - m (genitive panificis); third declension)
 >   1. a baker, breadmaker
 
 Panifex is a build automation system built around recipes and their resulting
@@ -41,7 +41,7 @@ def hello():
 @target
 def world():
     return sh("echo 'World' >> {output}",
-              output='hello.txt')
+              output='world.txt')
 
 @target
 def hello_world(hello, world):

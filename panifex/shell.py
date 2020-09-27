@@ -16,21 +16,13 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple, U
 
 from ansilog import fg
 
-from .artifacts import (
-    Artifact,
-    EnvironmentDict,
-    FileArtifact,
-    NullArtifact,
-    PolyArtifact,
-    as_artifact,
-    digest_env,
-    digest_param,
-    digest_param_map,
-)
+from .artifacts import Artifact, NullArtifact, PolyArtifact
 from .config import Config
+from .errors import BuildError
+from .files import FileArtifact, as_artifact
+from .params import EnvironmentDict, digest_env, digest_param, digest_param_map
 from .recipes import Recipe
 from .util import decode, is_iterable
-from .errors import BuildError
 
 # -------------------------------------------------------------------
 LineSinkFunction = Callable[[str], None]
@@ -227,6 +219,7 @@ class ShellRecipe(Recipe):
         to_stdin: Optional[str] = None,
         output: Optional[ArtifactOrPath] = None,
         input: Any = None,
+        requires: Any = None,
         echo: bool = True,
         success_codes: Set[int] = {0},
     ):
@@ -269,6 +262,18 @@ class ShellRecipe(Recipe):
         return Recipe.is_done.fget(self)
 
     @property
+    def ansi_input_display(self) -> Optional[str]:
+        if not self.input.is_null:
+            return f"{fg.blue(', '.join(digest_param(self.input, Path.cwd())))}"
+        return None
+
+    @property
+    def ansi_output_display(self) -> Optional[str]:
+        if not self.output.is_null:
+            return f"{fg.green(', '.join(digest_param(self.output, Path.cwd())))}"
+        return None
+
+    @property
     def ansi_display_info(self) -> str:
         args = shlex.split(self._interpolate_cmd(colorize=True))
         return f"{fg.magenta(args[0])} {' '.join(str(arg) for arg in args[1:])}"
@@ -293,6 +298,7 @@ class ShellRecipe(Recipe):
 
     async def make(self):
         log.debug("Entering ShellRecipe.make()")
+        config = Config.get()
         if self._result.has_returncode:
             if self._result.returncode in self._success_codes:
                 log.debug("ShellRecipe has already been completed.")
@@ -320,12 +326,19 @@ class ShellRecipe(Recipe):
             self._result.returncode = proc.returncode
             self._result.sink = sink
             if self._result.returncode not in self._success_codes:
+                for line in self._result.stderr:
+                    self.log_error(line)
                 raise BuildError(
                     "ShellCommand has failed (returncode: %d)" % self._result.returncode
                 )
 
+            if config.verbose:
+                for line in self._result.stdout:
+                    self.log_info(line)
+                for line in self._result.stderr:
+                    self.log_error(line)
+
         except Exception as e:
-            log.exception("Failed to execute command: %s", self._cmd)
             raise e
 
         finally:
@@ -376,7 +389,8 @@ class ShellFactory:
         env: Optional[EnvironmentDict] = None,
         to_stdin: Optional[str] = None,
         output: Optional[ArtifactOrPath] = None,
-        input: Optional[List[Any]] = None,
+        input: Any = None,
+        requires: Any = None,
         interactive=False,
         echo=True,
         **kwargs,
@@ -387,15 +401,16 @@ class ShellFactory:
         if interactive:
             cls = InteractiveShellRecipe
 
-        env = {**self._env, **(env or {}), "input": "{input}", "output": "{output}"}
+        env = {**self._env, **(env or {})}
 
         return cls(
-            cmd=cmd.format(**digest_param_map({**kwargs, **env})),
+            cmd=cmd.format(**digest_param_map({**kwargs, **env}), input="{input}", output="{output}"),
             cwd=cwd,
             env=env,
             to_stdin=to_stdin,
             output=output,
             input=input,
+            requires=requires,
             echo=echo,
         )
 

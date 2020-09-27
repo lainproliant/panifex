@@ -6,12 +6,16 @@
 #
 # Released under a 3-clause BSD license, see LICENSE for more info.
 # -------------------------------------------------------------------
-from .artifacts import (Artifact, FileArtifact, NullArtifact, PolyArtifact,
-                        ValueArtifact)
-from .build import build, factory, provide, recipe, target
-from .recipes import (FileRecipe, PolyRecipe, Recipe, SequenceRecipe,
-                      StaticFileRecipe)
+from .artifacts import Artifact, NullArtifact, PolyArtifact, ValueArtifact
+from .files import FileArtifact, FileRecipe, StaticFileRecipe
+from .build import BuildEngine, factory, recipe
+from .bake import build
+from .recipes import PolyRecipe, Recipe, SequenceRecipe
 from .shell import check, sh
+
+engine = BuildEngine.default()
+provide = engine.provide
+target = engine.target
 
 poly = PolyRecipe
 seq = SequenceRecipe

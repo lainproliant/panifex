@@ -8,18 +8,16 @@
 # --------------------------------------------------------------------
 import asyncio
 from enum import Enum
-from pathlib import Path
 from typing import Any, Dict, Generator, Iterable, List, Optional, Set, Union
 
 import xeno
 from ansilog import dim, fg
 from tree_format import format_tree
 
-from .artifacts import (Artifact, FileArtifact, NullArtifact, PolyArtifact,
-                        ValueArtifact, digest_param)
+from .artifacts import Artifact, NullArtifact, PolyArtifact, ValueArtifact
 from .config import Config
 from .errors import BuildError
-from .util import badge
+from .util import badge, uniq_list
 
 # --------------------------------------------------------------------
 log = Config.get().get_logger("panifex.recipe")
@@ -30,6 +28,7 @@ def if_not_quiet(f):
         config = Config.get()
         if not config.quiet:
             f(*args, **kwargs)
+
     return wrapper
 
 
@@ -61,26 +60,33 @@ class Recipe:
         return str(color(self.display_name))
 
     @property
-    def ansi_display_name_and_input_output(self) -> str:
-        input_display: Optional[str] = None
-        output_display: Optional[str] = None
-        if not self.input.is_null:
-            input_display = f"{fg.blue(', '.join(digest_param(self.input, Path.cwd())))}"
-        if not self.output.is_null:
-            output_display = f"{fg.green(', '.join(digest_param(self.output, Path.cwd())))}"
+    def ansi_input_display(self) -> Optional[str]:
+        return None
 
-        if input_display and output_display:
-            return f"{badge(self.ansi_display_name)} {input_display} -> {output_display}"
-        if input_display:
-            return f"{badge(self.ansi_display_name)} {input_display}"
-        if output_display:
-            return f"{badge(self.ansi_display_name)} -> {output_display}"
+    @property
+    def ansi_output_display(self) -> Optional[str]:
+        return None
+
+    @property
+    def ansi_display_name_and_input_output(self) -> str:
+        if self.ansi_input_display and self.ansi_output_display:
+            return f"{badge(self.ansi_display_name)} {self.ansi_input_display} -> {self.ansi_output_display}"
+        if self.ansi_input_display:
+            return f"{badge(self.ansi_display_name)} {self.ansi_input_display}"
+        if self.ansi_output_display:
+            return f"{badge(self.ansi_display_name)} -> {self.ansi_output_display}"
         return f"{badge(self.ansi_display_name)}"
 
     @if_not_quiet
     def log_start(self):
         if self.target:
             log.info(f"{badge(self.ansi_display_name)} start")
+
+    def log_error(self, msg, *args):
+        log.info(f"{badge(fg.red(self.display_name))} {msg}", *args)
+
+    def log_info(self, msg, *args):
+        log.info(f"{badge(dim(self.display_name))} {msg}", *args)
 
     @if_not_quiet
     def log_action(self):
@@ -108,21 +114,24 @@ class Recipe:
         if self.target:
             log.info(f"{badge(fg.green(self.display_name))} ok")
 
-    def log_exception(self, e: Exception, exc_info=False):
-        log.exception(f"{badge(fg.red(self.display_name))} {str(e)}", exc_info=exc_info)
-
     @property
     def is_done(self) -> bool:
-        """ Determine if all of the artifacts of this recipe exist and
+        """Determine if all of the artifacts of this recipe exist and
         are up to date.  Will always return false if there are no artifacts
-        made by this recipe. """
+        made by this recipe."""
         log.debug("self.name: %s" % self.name)
         log.debug("self.output: %s" % str(self.output))
         log.debug("self.output.exists: %s" % str(self.output.exists))
         log.debug("self.input.age: %s", str(self.input.age))
         log.debug("self.output.age: %s", str(self.output.age))
-        log.debug("self.output.age <= self.input.age: %s", str(self.output.age <= self.input.age))
-        log.debug("is_done: %s" % str(self.output.exists and self.output.age <= self.input.age))
+        log.debug(
+            "self.output.age <= self.input.age: %s",
+            str(self.output.age <= self.input.age),
+        )
+        log.debug(
+            "is_done: %s"
+            % str(self.output.exists and self.output.age <= self.input.age)
+        )
         return self.output.exists and self.output.age <= self.input.age
 
     def assert_is_done(self):
@@ -134,26 +143,29 @@ class Recipe:
         raise NotImplementedError()
 
     def make_sync(self, loop=asyncio.get_event_loop()):
-        """ Execute this recipe in order to create its artifacts, if any.
-        Can be called outside but not within an event loop. """
+        """Execute this recipe in order to create its artifacts, if any.
+        Can be called outside but not within an event loop."""
         loop.run_until_complete(self.make())
 
     async def resolve_deps(self):
         """ Make all dependencies of this recipe. """
         await asyncio.gather(
-            *(recipe.resolve() for recipe in self.direct_dependencies if not recipe.is_done)
+            *(
+                recipe.resolve()
+                for recipe in self.direct_dependencies
+                if not recipe.is_done
+            )
         )
         for recipe in self.dependencies:
             recipe.assert_is_done()
 
     def resolve_deps_sync(self, loop=asyncio.get_event_loop()):
-        """ Make all dependencies of this recipe.
-        Can be called outside but not within an event loop. """
+        """Make all dependencies of this recipe.
+        Can be called outside but not within an event loop."""
         loop.run_until_complete(self.resolve_deps())
 
     async def resolve(self):
         """ Execute this recipe and all its dependencies, if any. """
-        config = Config.get()
         async with self._lock:
             if not self.is_done:
                 try:
@@ -165,13 +177,12 @@ class Recipe:
                     self.log_ok()
 
                 except Exception as e:
-                    self.log_exception(e)
-                    if config.debug:
-                        raise e
+                    self.log_error(str(e))
+                    raise e
 
     def resolve_sync(self, loop=asyncio.get_event_loop()):
-        """ Execute this recipe and all of its dependencies, if any.
-        Can be called outside but not within an event loop. """
+        """Execute this recipe and all of its dependencies, if any.
+        Can be called outside but not within an event loop."""
         loop.run_until_complete(self.resolve())
 
     async def clean(self, echo=False):
@@ -184,8 +195,8 @@ class Recipe:
                 self.log_cleaned()
 
     def clean_sync(self, loop=asyncio.get_event_loop()):
-        """ Clean all of the artifacts this recipe would make, if any.
-        Can be called outside but not within an event loop. """
+        """Clean all of the artifacts this recipe would make, if any.
+        Can be called outside but not within an event loop."""
         loop.run_until_complete(self.clean())
 
     async def purge(self, echo=False):
@@ -199,8 +210,8 @@ class Recipe:
                 self.log_purged()
 
     def purge_sync(self, loop=asyncio.get_event_loop()):
-        """ Clean this and all dependencies.
-        Can be called outside but not within an event loop. """
+        """Clean this and all dependencies.
+        Can be called outside but not within an event loop."""
         loop.run_until_complete(self.purge())
 
     def print_tree(self):
@@ -214,26 +225,26 @@ class Recipe:
 
     @property
     def output(self) -> Artifact:
-        """ List of the artifacts made by this recipe.  This should reflect the
-        reversible system states changed by executing this recipe. """
+        """List of the artifacts made by this recipe.  This should reflect the
+        reversible system states changed by executing this recipe."""
         return NullArtifact()
 
     @property
     def input(self) -> Artifact:
-        """ The artifact or artifacts that this recipe uses.  Defined by the
-        artifacts generated by its dependencies. """
+        """The artifact or artifacts that this recipe uses.  Defined by the
+        artifacts generated by its dependencies."""
         return PolyRecipe(self.dependencies).output
 
     @property
     def dependencies(self) -> List["Recipe"]:
-        """ List of the recipes that must be completed before this recipe can
-        be executed. """
+        """List of the recipes that must be completed before this recipe can
+        be executed."""
         return self._deps
 
     @property
     def direct_dependencies(self) -> List["Recipe"]:
-        """ List of the direct dependencies, i.e. the last recipes that need to
-        be completed before this recipe can be executed. """
+        """List of the direct dependencies, i.e. the last recipes that need to
+        be completed before this recipe can be executed."""
         return sorted(self._deps, key=lambda x: x.name or x.__class__.__name__)
 
     def __repr__(self):
@@ -336,7 +347,7 @@ class PolyRecipe(Recipe):
 
     @property
     def output(self) -> Artifact:
-        return PolyArtifact(set(self._find_output()))
+        return PolyArtifact(uniq_list(self._find_output()))
 
     def _find_output(self) -> Generator[Artifact, None, None]:
         for recipe in self._recipes:
@@ -360,27 +371,3 @@ class SequenceRecipe(PolyRecipe):
     async def make(self):
         for recipe in self._recipes:
             await recipe.resolve()
-
-
-# --------------------------------------------------------------------
-class FileRecipe(Recipe):
-    """ A recipe for creating a single file or directory. """
-
-    def __init__(self, path: Path, input: Optional[List[Recipe]] = None):
-        super().__init__(input)
-        self.path = path
-
-    @property
-    def output(self) -> Artifact:
-        return FileArtifact(self.path)
-
-
-# --------------------------------------------------------------------
-class StaticFileRecipe(FileRecipe):
-    """ A recipe for static files that must exist. """
-
-    def __init__(self, path: Path):
-        super().__init__(path)
-
-    async def make(self):
-        raise BuildError(f"A required static file is missing: {self.path}")
