@@ -51,12 +51,7 @@ def build(default: Any, build: Optional[BuildEngine] = None):
         if callable(default):
             default = xeno.MethodAttributes.for_method(default).get('name')
 
-        try:
-            recipes = build.compile_targets(config.targets or [default])
-
-        except InvalidTargetError as e:
-            log.error("'%s' is not a valid target: %s", e.name, e)
-            raise e
+        recipes = build.compile_targets(config.targets or [default])
 
         goal = Goal.BUILD
         if config.clean:
@@ -69,7 +64,7 @@ def build(default: Any, build: Optional[BuildEngine] = None):
         log.info(fg.green("OK"))
 
     except Exception as e:
-        log.error("An error occurred: %s", e)
+        log.error(e)
         if config.debug:
             log.exception("Exception details >>>")
         log.info(fg.red("FAIL"))

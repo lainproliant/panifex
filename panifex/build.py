@@ -15,7 +15,8 @@ from tree_format import format_tree
 
 from .config import Config
 from .errors import BuildError, InvalidTargetError
-from .recipes import FunctionalRecipe, PolyRecipe, Recipe
+from .recipes import FunctionalRecipe, PolyRecipe, Recipe, SequenceRecipe
+from .util import is_iterable
 
 # --------------------------------------------------------------------
 log = Config.get().get_logger("panifex.build")
@@ -79,9 +80,25 @@ class BuildEngine():
         @xeno.MethodAttributes.wraps(f)
         async def wrapper(*args, **kwargs):
             result = await xeno.async_wrap(f, *args, **kwargs)
+
+            if target:
+                if is_iterable(result):
+                    recipes = []
+                    for value in result:
+                        if not isinstance(value, Recipe):
+                            raise InvalidTargetError("Target definition returned one or more objects that are not a Recipe.")
+                        recipes.append(value)
+                    if isinstance(result, tuple):
+                        result = SequenceRecipe(recipes)
+                    else:
+                        result = PolyRecipe(recipes)
+                elif not isinstance(result, Recipe):
+                    raise InvalidTargetError("Target definition did not return a Recipe.")
+
             if isinstance(result, Recipe):
                 result.name = f.__name__
                 result.target = target
+
             return result
 
         self.injector.provide(wrapper, is_singleton=True)

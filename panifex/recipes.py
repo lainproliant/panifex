@@ -56,8 +56,12 @@ class Recipe:
 
     @property
     def ansi_display_name(self) -> str:
+        config = Config.get()
         color = fg.cyan if self.target else dim
-        return str(color(self.display_name))
+        display_name = str(color(self.display_name))
+        if config.debug:
+            display_name = f'{display_name} ({dim(self.__class__.__name__)})'
+        return display_name
 
     @property
     def ansi_input_display(self) -> Optional[str]:
@@ -322,24 +326,19 @@ class FunctionalRecipe(Recipe):
 
 # --------------------------------------------------------------------
 class PolyRecipe(Recipe):
-    @classmethod
-    def _calculate_deps(cls, recipes: List[Recipe]) -> List[Recipe]:
-        deps_set: Set[Recipe] = set(recipes)
-        for recipe in recipes:
-            deps_set.update(recipe.dependencies)
-        return list(deps_set)
-
     def __init__(self, recipes: Iterable[Recipe]):
         self._recipes = list(recipes)
         super().__init__(self._calculate_deps(self._recipes))
 
+    def _calculate_deps(self, recipes: List[Recipe]) -> List[Recipe]:
+        deps_set: Set[Recipe] = set()
+        for recipe in recipes:
+            deps_set.update(recipe.dependencies)
+        return list(deps_set)
+
     @property
     def is_done(self) -> bool:
         return all(r.is_done for r in self._recipes)
-
-    @property
-    def direct_dependencies(self):
-        return sorted(self._recipes, key=lambda x: x.name or x.__class__.__name__)
 
     @property
     def input(self) -> Artifact:
@@ -365,9 +364,6 @@ class PolyRecipe(Recipe):
 
 # --------------------------------------------------------------------
 class SequenceRecipe(PolyRecipe):
-    def __init__(self, recipes: Iterable[Recipe]):
-        super().__init__(recipes)
-
     async def make(self):
         for recipe in self._recipes:
             await recipe.resolve()

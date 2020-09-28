@@ -110,6 +110,9 @@ class NullArtifact(Artifact):
     def __hash__(self) -> int:
         return 0
 
+    def __repr__(self) -> str:
+        return "<NullArtifact>"
+
 
 # --------------------------------------------------------------------
 class PolyArtifact(Artifact):
