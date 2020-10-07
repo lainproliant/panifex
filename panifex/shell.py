@@ -30,7 +30,7 @@ OutputTaskData = Tuple[asyncio.StreamReader, LineSinkFunction]
 ArtifactOrPath = Union[str, Path, Artifact]
 
 # --------------------------------------------------------------------
-log = Config.get().get_logger("panifex.shell")
+log = Config.get().get_logger(__name__)
 
 
 # --------------------------------------------------------------------

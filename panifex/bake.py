@@ -26,9 +26,7 @@ log = Config.get().get_logger("panifex.bake")
 # --------------------------------------------------------------------
 def build(default: Any, build: Optional[BuildEngine] = None):
     """ This function triggers the build of targets specified.
-
     It is intended to be called at the end of `bake.py` build scripts.
-
     If `default` is provided, it will be used as the target if no other targets
     are specified on the command line."""
 
