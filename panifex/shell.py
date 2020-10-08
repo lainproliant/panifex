@@ -287,14 +287,16 @@ class ShellRecipe(Recipe):
         return PolyArtifact([Recipe.input.fget(self), *self._inputs])
 
     def _interpolate_cmd(self, colorize=False) -> str:
-        input_param = shlex.join(digest_param(self.input, self._cwd))
-        output_param = shlex.join(digest_param(self.output, self._cwd))
-
+        input_params = digest_param(self.input, self._cwd)
+        output_params = digest_param(self.output, self._cwd)
         if colorize:
-            input_param = fg.cyan(input_param)
-            output_param = fg.green(output_param)
+            input_params = [fg.cyan(p) for p in input_params]
+            output_params = [fg.green(p) for p in output_params]
 
-        return self._cmd.format(**{"input": input_param, "output": output_param})
+        return self._cmd.format(
+            input=' '.join(shlex.quote(param) for param in input_params),
+            output=' '.join(shlex.quote(param) for param in output_params)
+        )
 
     async def make(self):
         log.debug("Entering ShellRecipe.make()")
