@@ -1,3 +1,7 @@
+# NOTE - DEPRECATION
+This package is now superceeded by `xeno.build` in the `xeno` package,
+see https://github.com/lainproliant/xeno
+
 # Panifex: A Python Build Automation System -- Version 2.0
 - Author: Lain Musgrove
 - License: MIT, see LICENSE
