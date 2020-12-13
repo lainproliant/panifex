@@ -10,8 +10,8 @@ with open(path.join(here, "README.md"), encoding="utf-8") as f:
 
 setup(
     name="panifex",
-    version="2.0.0",
-    description="A make-like DI-based Python build system.",
+    version="2.0.1",
+    description="DEPRECATED: see xeno.build in the xeno package instead.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/lainproliant/panifex",
